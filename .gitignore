@@ -1,0 +1,8 @@
+.pio
+.venv
+.venv-pio
+.tmp
+*.bin
+*.elf
+*.map
+.DS_Store
