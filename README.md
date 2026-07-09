@@ -43,6 +43,7 @@ See [`docs/lessons-learned.md`](docs/lessons-learned.md) for the bugs and hardwa
 - [ ] **Typing ETA in web UI** — show estimated completion time based on speed mode and remaining characters.
 - [ ] **Huge paste support** — reliably paste 6000+ characters without stalling or dropping data.
 - [ ] **Ultimate mouse jiggler** — 1-pixel micro-movements, human-like jitter, work-hours schedule, smart pause during paste, and a real-time status panel.
+- [ ] **Human simulation typing** — automatically type random text or a chosen blurb, then backspace/delete it, repeating to simulate active work.
 - [ ] **Multi-language paste support** — handle non-ASCII input such as Korean, emoji, and other scripts.
 
 ## License
