@@ -40,6 +40,8 @@ See [`docs/lessons-learned.md`](docs/lessons-learned.md) for the bugs and hardwa
 
 - [ ] **HID brand cloning** — make the device advertise as different keyboard vendors (Logitech, Apple, etc.).
 - [ ] **Web UI polish** — fix layout/usability issues and add live status information.
+- [ ] **Typing ETA in web UI** — show estimated completion time based on speed mode and remaining characters.
+- [ ] **Huge paste support** — reliably paste 6000+ characters without stalling or dropping data.
 - [ ] **Ultimate mouse jiggler** — 1-pixel micro-movements, human-like jitter, work-hours schedule, smart pause during paste, and a real-time status panel.
 - [ ] **Multi-language paste support** — handle non-ASCII input such as Korean, emoji, and other scripts.
 
