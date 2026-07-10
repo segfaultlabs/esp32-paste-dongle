@@ -592,7 +592,6 @@ label {
   <div id="statusOrb" title="Device status"></div>
   <span id="header-brand">PasteDongle</span>
   <span id="deviceInfoBar" class="header-stats">Connecting…</span>
-  <button id="themeBtn" title="Toggle theme" aria-label="Toggle light/dark theme">🌙</button>
 </header>
 
 <!-- ── TAB BAR ─────────────────────────────────────────────────── -->
@@ -936,6 +935,21 @@ label {
 <!-- ══════════════ TAB 4: SETTINGS ══════════════ -->
 <div class="tab-panel" id="tab-settings">
 
+  <!-- Appearance -->
+  <p class="section-title">Appearance</p>
+  <div class="card">
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Dark mode</div>
+        <div class="toggle-sub">Easy on the eyes, matches the device LED aesthetic</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="darkModeToggle">
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+  </div>
+
   <!-- Layout -->
   <p class="section-title">Keyboard Layout</p>
   <div class="card">
@@ -1015,7 +1029,23 @@ label {
   <!-- Device info -->
   <p class="section-title">Device</p>
   <div class="card">
-    <div id="deviceInfoFull" style="margin-bottom:.75rem;">Loading…</div>
+    <div id="deviceInfoFull" style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem;">Loading…</div>
+
+    <!-- Heap health bar -->
+    <div style="margin-bottom:.75rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.35rem;">
+        <span style="font-size:.75rem;color:var(--muted);font-weight:500;">Heap health</span>
+        <span id="heapPct" style="font-size:.75rem;font-weight:700;font-family:ui-monospace,monospace;">—</span>
+      </div>
+      <div style="background:var(--bg-input);border-radius:4px;overflow:hidden;height:8px;">
+        <div id="heapBar" style="height:100%;width:0%;border-radius:4px;transition:width .4s,background .4s;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:.25rem;font-size:.7rem;color:var(--muted);">
+        <span id="heapFreeKb">—</span>
+        <span id="heapTotalKb">—</span>
+      </div>
+    </div>
+
     <button class="btn btn-danger" id="rebootBtn" style="width:100%;">Reboot device</button>
     <p id="rebootStatus" style="font-size:.8rem;color:var(--muted);margin-top:.4rem;min-height:1em;"></p>
   </div>
@@ -1098,17 +1128,16 @@ function setOrbState(state) {
 }
 
 /* ── Theme ──────────────────────────────────────────────────────── */
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('pd_theme', theme);
+  const toggle = document.getElementById('darkModeToggle');
+  if (toggle) toggle.checked = (theme === 'dark');
+}
 (function initTheme() {
-  const saved = localStorage.getItem('pd_theme') || 'dark';
-  document.documentElement.setAttribute('data-theme', saved);
-  document.getElementById('themeBtn').textContent = saved === 'dark' ? '🌙' : '☀️';
+  applyTheme(localStorage.getItem('pd_theme') || 'dark');
 })();
-document.getElementById('themeBtn').onclick = () => {
-  const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', cur);
-  localStorage.setItem('pd_theme', cur);
-  document.getElementById('themeBtn').textContent = cur === 'dark' ? '🌙' : '☀️';
-};
+// Wired after DOM ready below
 
 /* ── Tabs ───────────────────────────────────────────────────────── */
 function switchTab(id) {
@@ -1820,10 +1849,32 @@ function fmtUptime(ms) {
 async function loadDeviceInfo() {
   try {
     const j = await fetch('/api/info').then(r=>r.json());
-    const heap=Math.round(j.free_heap/1024), minH=Math.round(j.min_free_heap/1024);
-    const bar=`${j.backend.toUpperCase()} · v${j.firmware_version} · up ${fmtUptime(j.uptime_ms)} · heap ${heap} kB (min ${minH} kB)`;
-    document.getElementById('deviceInfoBar').textContent = bar;
-    document.getElementById('deviceInfoFull').textContent = bar;
+    const free  = Math.round(j.free_heap / 1024);
+    const total = j.heap_size ? Math.round(j.heap_size / 1024) : 320; // fallback 320kB for ESP32-S3
+    const pct   = Math.round((j.free_heap / (j.heap_size || (total*1024))) * 100);
+
+    // Header: compact stats
+    document.getElementById('deviceInfoBar').textContent =
+      `${j.backend.toUpperCase()} · v${j.firmware_version} · up ${fmtUptime(j.uptime_ms)} · heap ${pct}%`;
+
+    // Device card: full stats text
+    document.getElementById('deviceInfoFull').textContent =
+      `${j.backend.toUpperCase()} · v${j.firmware_version} · up ${fmtUptime(j.uptime_ms)}`;
+
+    // Heap health bar
+    const barEl  = document.getElementById('heapBar');
+    const pctEl  = document.getElementById('heapPct');
+    const freeEl = document.getElementById('heapFreeKb');
+    const totEl  = document.getElementById('heapTotalKb');
+    if (barEl) {
+      const colour = pct > 60 ? '#4ade80' : pct > 30 ? 'var(--warn)' : 'var(--error)';
+      barEl.style.width      = pct + '%';
+      barEl.style.background = colour;
+      pctEl.textContent  = pct + '%';
+      pctEl.style.color  = colour;
+      freeEl.textContent = free + ' kB free';
+      totEl.textContent  = total + ' kB total';
+    }
   } catch(e){
     document.getElementById('deviceInfoBar').textContent = 'Connecting…';
   }
@@ -1945,6 +1996,13 @@ fetch('/api/status').then(r=>r.json()).then(j => {
 }).catch(()=>{});
 
 /* ── Initialise ─────────────────────────────────────────────────── */
+// Wire dark mode toggle (DOM now exists)
+const darkModeToggleEl = document.getElementById('darkModeToggle');
+if (darkModeToggleEl) {
+  darkModeToggleEl.checked = (localStorage.getItem('pd_theme') || 'dark') === 'dark';
+  darkModeToggleEl.onchange = () => applyTheme(darkModeToggleEl.checked ? 'dark' : 'light');
+}
+
 loadJigglerConfig();
 loadSupportedChars();
 loadSnippets();

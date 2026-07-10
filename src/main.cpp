@@ -1445,9 +1445,10 @@ static void start_web_ui() {
 
     server.on("/api/info", HTTP_GET, [](AsyncWebServerRequest* request) {
         String body = "{";
-        body += "\"uptime_ms\":"   + String(millis());
-        body += ",\"free_heap\":"  + String(ESP.getFreeHeap());
+        body += "\"uptime_ms\":"    + String(millis());
+        body += ",\"free_heap\":"   + String(ESP.getFreeHeap());
         body += ",\"min_free_heap\":" + String(ESP.getMinFreeHeap());
+        body += ",\"heap_size\":"   + String(ESP.getHeapSize());
         body += ",\"firmware_version\":\"" PASTE_DONGLE_VERSION "\"";
 #ifdef HID_BACKEND_USB
         body += ",\"backend\":\"usb\"";
