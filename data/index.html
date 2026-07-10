@@ -1,527 +1,1186 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Paste Dongle</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PasteDongle</title>
 <style>
-body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2em auto; padding: 0 1em; }
-h2 { margin-top: 1.8em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
-h3 { margin-top: 1.2em; }
-label { display: block; margin: 0.9em 0 0.2em; }
-input[type="text"], input[type="number"], select, textarea { width: 100%; padding: 0.5em; box-sizing: border-box; font: inherit; }
-input[type="range"] { width: 100%; }
+/* ── Design tokens ─────────────────────────────────────────────── */
+:root {
+  --bg:         #0a0a0f;
+  --bg-card:    #13131f;
+  --bg-input:   #1c1c2a;
+  --border:     #2d2d42;
+  --text:       #e8e8ff;
+  --muted:      #7070a0;
+  --accent:     #00e5a0;
+  --accent-dim: #0a2e22;
+  --accent-glow:rgba(0,229,160,0.18);
+  --warn:       #f59e0b;
+  --error:      #f43f5e;
+  --radius:     10px;
+  --shadow:     0 2px 20px rgba(0,0,0,0.55);
+  --transition: 140ms ease;
+  --touch:      44px;
+  --header-h:   52px;
+  --tabs-h:     50px;
+}
+[data-theme="light"] {
+  --bg:         #f4f5fa;
+  --bg-card:    #ffffff;
+  --bg-input:   #eef0f8;
+  --border:     #d0d4e8;
+  --text:       #1a1a2e;
+  --muted:      #6b7080;
+  --accent-dim: #d0f7ec;
+  --shadow:     0 2px 12px rgba(0,0,0,0.10);
+}
+
+/* ── Reset ─────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; }
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100%;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+button { cursor: pointer; font: inherit; }
+input, select, textarea { font: inherit; color: var(--text); }
+a { color: var(--accent); text-decoration: none; }
+
+/* ── Scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Sticky header ─────────────────────────────────────────────── */
+#app-header {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  height: var(--header-h);
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 1rem; gap: 0.75rem;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+#statusOrb {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  transition: background var(--transition);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+#statusOrb.no-host  { background: var(--muted); box-shadow: none; }
+#statusOrb.typing   { animation: orbPulse 0.65s ease-in-out infinite; }
+#statusOrb.jiggling { background: #3b82f6; box-shadow: 0 0 6px rgba(59,130,246,.35); animation: orbPulse 1.3s ease-in-out infinite; }
+#statusOrb.sim      { background: #a855f7; box-shadow: 0 0 6px rgba(168,85,247,.35); }
+#statusOrb.error    { background: var(--error); box-shadow: 0 0 6px rgba(244,63,94,.35); }
+
+@keyframes orbPulse {
+  0%,100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .55; transform: scale(.82); }
+}
+
+#header-brand {
+  font-weight: 700; font-size: 1rem; letter-spacing: -0.01em;
+  color: var(--text);
+}
+#deviceInfoBar, .header-stats {
+  flex: 1;
+  font-size: 0.72rem; color: var(--muted);
+  text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#themeBtn {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  color: var(--muted); font-size: 1rem;
+  display: grid; place-items: center;
+  transition: var(--transition);
+  flex-shrink: 0;
+}
+#themeBtn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Tab bar ───────────────────────────────────────────────────── */
+#tab-bar {
+  position: fixed; top: var(--header-h); left: 0; right: 0; z-index: 90;
+  height: var(--tabs-h);
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+}
+.tab-btn {
+  flex: 1; border: none; background: none;
+  color: var(--muted); font-size: 0.8rem;
+  padding: 0.5rem 0.25rem;
+  border-bottom: 2px solid transparent;
+  transition: var(--transition);
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.tab-btn .tab-icon { font-size: 1rem; line-height: 1; }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-btn:hover:not(.active) { color: var(--text); }
+
+/* ── Main content area ─────────────────────────────────────────── */
+#main {
+  margin-top: calc(var(--header-h) + var(--tabs-h));
+  padding: 1rem;
+  max-width: 680px;
+  margin-left: auto;
+  margin-right: auto;
+  min-height: calc(100vh - var(--header-h) - var(--tabs-h));
+}
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ── Cards ─────────────────────────────────────────────────────── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+.card-title {
+  font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+
+/* ── Inputs ────────────────────────────────────────────────────── */
+input[type="text"],
+input[type="number"],
+input[type="password"],
+select, textarea {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  color: var(--text);
+  transition: var(--transition);
+  outline: none;
+  -webkit-appearance: none;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+input.error { border-color: var(--error); }
+select { cursor: pointer; }
 textarea { resize: vertical; }
-button { padding: 0.6em 1.2em; margin: 0.5em 0.5em 0 0; }
-#progressWrap { width: 100%; background: #e9ecef; border-radius: 0.25em; overflow: hidden; }
-#progressBar { width: 0%; height: 1.2em; background: #007bff; transition: width 0.2s; }
-.status { color: #555; margin-top: 0.5em; }
-#stats { font-size: 0.9em; color: #666; }
-.hint { font-size: 0.82em; color: #777; margin: 0.1em 0 0.5em; line-height: 1.4; }
-.card { background: #f8f9fa; border: 1px solid #e4e4e4; border-radius: 6px; padding: 0.9em 1.1em; margin: 0.8em 0; }
-code { background: #eee; border-radius: 3px; padding: 0.1em 0.3em; font-size: 0.88em; }
-details summary { cursor: pointer; font-weight: 600; user-select: none; }
-.macro-ref td { padding: 0.25em 0.5em; vertical-align: top; font-size: 0.85em; }
-.macro-ref td:first-child { white-space: nowrap; }
+input[type="range"] {
+  width: 100%; height: 4px; border: none; padding: 0;
+  background: var(--border); border-radius: 2px;
+  accent-color: var(--accent); cursor: pointer;
+}
+input[type="file"] {
+  background: none; border: none; padding: 0;
+  color: var(--muted); font-size: 0.85rem;
+}
+label {
+  display: block; font-size: 0.8rem;
+  color: var(--muted); margin-bottom: 0.4rem;
+  font-weight: 500;
+}
+
+/* ── Buttons ───────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 0.4em; padding: 0.55rem 1rem;
+  border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg-input); color: var(--text);
+  font-size: 0.875rem; font-weight: 500;
+  transition: var(--transition);
+  white-space: nowrap; min-height: var(--touch);
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-primary {
+  background: var(--accent); color: #000;
+  border-color: var(--accent); font-weight: 700;
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.1); color: #000; }
+.btn-danger { border-color: var(--error); color: var(--error); }
+.btn-danger:hover { background: rgba(244,63,94,.1); }
+.btn-sm { min-height: 32px; padding: 0.3rem 0.7rem; font-size: 0.8rem; border-radius: 6px; }
+.btn-ghost {
+  background: none; border-color: transparent;
+  color: var(--muted); padding: 0.3rem 0.5rem;
+}
+.btn-ghost:hover { color: var(--error); background: rgba(244,63,94,.08); border-color: transparent; }
+
+/* ── CTA paste button with morphing progress ───────────────────── */
+#pasteBtn {
+  width: 100%; min-height: 50px;
+  position: relative; overflow: hidden;
+  background: var(--accent); color: #000;
+  border: none; border-radius: var(--radius);
+  font-size: 0.95rem; font-weight: 700;
+  letter-spacing: -0.01em;
+  transition: filter var(--transition);
+}
+#pasteBtn::before {
+  content: '';
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 0%; background: rgba(0,0,0,0.25);
+  transition: width 0.35s linear;
+  z-index: 0;
+}
+#pasteBtn.typing::before { width: var(--paste-pct, 0%); }
+#pasteBtn span { position: relative; z-index: 1; }
+#pasteBtn:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+#pasteBtn:not(:disabled):hover { filter: brightness(1.08); }
+
+/* ── Speed segmented control ───────────────────────────────────── */
+.speed-seg {
+  display: flex; gap: 0.4rem; margin-bottom: 0.75rem;
+}
+.speed-btn {
+  flex: 1; min-height: 40px; border-radius: 8px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  color: var(--muted); font-size: 0.82rem; font-weight: 500;
+  transition: var(--transition);
+}
+.speed-btn.active {
+  background: var(--accent-dim); border-color: var(--accent);
+  color: var(--accent);
+}
+.speed-btn:hover:not(.active) { border-color: var(--muted); color: var(--text); }
+
+/* ── Paste textarea ────────────────────────────────────────────── */
+#textWrap {
+  position: relative; margin-bottom: 0.5rem;
+}
+#text {
+  width: 100%; min-height: 200px; max-height: 50vh;
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 0.875rem; line-height: 1.6;
+  resize: vertical;
+  border-radius: var(--radius); padding: 0.8rem;
+}
+#textWrap.drag-over #text {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+#dropHint {
+  position: absolute; inset: 0; pointer-events: none;
+  display: none; align-items: center; justify-content: center;
+  border-radius: var(--radius);
+  background: var(--accent-dim);
+  border: 2px dashed var(--accent);
+  color: var(--accent); font-size: 0.9rem; font-weight: 600;
+}
+#textWrap.drag-over #dropHint { display: flex; }
+
+/* ── Stats bar ─────────────────────────────────────────────────── */
+#statsBar {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.78rem; color: var(--muted); margin-bottom: 0.75rem;
+  min-height: 1.4em;
+}
+#statsBar .warn-chip {
+  background: rgba(245,158,11,.12);
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  padding: 0.1em 0.5em; border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+/* ── Live echo strip ───────────────────────────────────────────── */
+#echoStrip {
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem; color: var(--muted);
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.4rem 0.7rem;
+  margin: 0.5rem 0; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; display: none;
+}
+#echoStrip.active { display: block; }
+#echoStrip .cursor-char {
+  background: var(--accent); color: #000;
+  border-radius: 2px; padding: 0 1px;
+}
+
+/* ── Cancel row ────────────────────────────────────────────────── */
+#cancelRow {
+  display: flex; justify-content: center; margin-top: 0.5rem;
+}
+#cancelBtn {
+  font-size: 0.8rem; color: var(--muted); background: none; border: none;
+  cursor: pointer; padding: 0.3rem 0.5rem; border-radius: 4px;
+}
+#cancelBtn:not(:disabled):hover { color: var(--error); }
+#cancelBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ── Paste history ─────────────────────────────────────────────── */
+#histSection { margin-top: 1rem; }
+#histSection h3 {
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem;
+}
+#histChips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.hist-chip {
+  display: inline-flex; align-items: center; gap: 0.4em;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.25rem 0.5rem;
+  font-size: 0.78rem; color: var(--muted);
+  cursor: pointer; transition: var(--transition);
+  max-width: 200px;
+}
+.hist-chip:hover { border-color: var(--accent); color: var(--text); }
+.hist-chip .hist-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+.hist-chip .hist-del {
+  font-size: 0.7rem; opacity: .5; padding: 0 2px; border: none;
+  background: none; color: inherit; cursor: pointer; line-height: 1;
+}
+.hist-chip .hist-del:hover { opacity: 1; color: var(--error); }
+
+/* ── Paste top row ─────────────────────────────────────────────── */
+#pasteTopRow {
+  display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;
+}
+#clipBtn { flex-shrink: 0; }
+#pasteTopRow .spacer { flex: 1; }
+#layoutCompact { width: auto; padding: 0.35rem 0.6rem; font-size: 0.8rem; border-radius: 6px; }
+
+/* ── Snippet search row ────────────────────────────────────────── */
+#snippetTopRow {
+  display: flex; gap: 0.5rem; margin-bottom: 0.75rem; align-items: center;
+}
+#snippetSearch { flex: 1; padding: 0.5rem 0.75rem; }
+#saveSnippetBtn { flex-shrink: 0; }
+
+/* ── Snippet card ──────────────────────────────────────────────── */
+.snippet-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.85rem;
+  margin-bottom: 0.5rem;
+  transition: border-color var(--transition);
+}
+.snippet-card:hover { border-color: var(--muted); }
+.snippet-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; }
+.snippet-title { font-weight: 600; font-size: 0.9rem; flex: 1; }
+.snippet-chars { font-size: 0.75rem; color: var(--muted); flex-shrink: 0; }
+.snippet-preview {
+  font-size: 0.78rem; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-bottom: 0.5rem;
+  font-family: ui-monospace, monospace;
+}
+.snippet-actions { display: flex; gap: 0.4rem; }
+.snippet-actions .btn { min-height: 36px; flex: 1; font-size: 0.8rem; }
+
+/* ── Snippet edit card ─────────────────────────────────────────── */
+#snippetEditArea {
+  background: var(--bg-card); border: 1px solid var(--accent);
+  border-radius: var(--radius); padding: 1rem; margin-top: 0.75rem;
+  display: none;
+}
+#snippetEditArea.active { display: block; }
+#snippetEditArea h4 { font-size: 0.8rem; color: var(--accent); margin-bottom: 0.75rem; }
+#snippetEditArea label { margin-top: 0.6rem; }
+#snippetEditArea .edit-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+
+/* ── Macro editor ──────────────────────────────────────────────── */
+#macroEditorWrap {
+  display: flex; border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+  background: var(--bg-input);
+  margin-bottom: 0.5rem;
+}
+#macroLineNums {
+  padding: 0.8rem 0.6rem;
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem; line-height: 1.6;
+  color: var(--muted); text-align: right;
+  min-width: 2.5rem; user-select: none;
+  white-space: pre;
+}
+#macroScript {
+  flex: 1; min-height: 180px;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.8rem; line-height: 1.6;
+  padding: 0.8rem; resize: vertical;
+  border: none; border-radius: 0;
+  background: var(--bg-input);
+}
+#macroScript:focus { box-shadow: none; border-color: transparent; }
+#macroEditorWrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+#macroDuration { font-size: 0.78rem; color: var(--muted); margin-bottom: 0.6rem; }
+.macro-actions { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
+#macroStatus { font-size: 0.82rem; color: var(--muted); min-height: 1.2em; }
+
+/* ── Macro syntax reference ────────────────────────────────────── */
+#macroRef {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden; margin-bottom: 0.75rem;
+}
+#macroRef summary {
+  padding: 0.7rem 0.9rem; cursor: pointer;
+  font-size: 0.8rem; font-weight: 600; color: var(--muted);
+  user-select: none; list-style: none;
+}
+#macroRef summary::-webkit-details-marker { display: none; }
+#macroRef summary::before { content: '▶ '; font-size: 0.65rem; }
+#macroRef[open] summary::before { content: '▼ '; }
+.ref-table { width: 100%; border-collapse: collapse; }
+.ref-table td { padding: 0.25rem 0.9rem; font-size: 0.8rem; vertical-align: top; }
+.ref-table td:first-child {
+  font-family: ui-monospace, monospace; white-space: nowrap;
+  color: var(--accent); padding-right: 1.5rem;
+  border-right: 1px solid var(--border);
+}
+.ref-table td:last-child { color: var(--muted); }
+.ref-table tr:not(:last-child) td { border-bottom: 1px solid var(--border); }
+
+/* ── Toggle switch ─────────────────────────────────────────────── */
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  min-height: var(--touch); gap: 1rem;
+}
+.toggle-label { font-size: 0.9rem; font-weight: 500; }
+.toggle-sub { font-size: 0.75rem; color: var(--muted); }
+.toggle {
+  position: relative; display: inline-block;
+  width: 46px; height: 26px; flex-shrink: 0;
+}
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-track {
+  position: absolute; inset: 0;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 13px; cursor: pointer; transition: var(--transition);
+}
+.toggle-track::after {
+  content: ''; position: absolute;
+  width: 18px; height: 18px; left: 3px; top: 3px;
+  background: var(--muted); border-radius: 50%;
+  transition: var(--transition);
+}
+.toggle input:checked ~ .toggle-track {
+  background: var(--accent-dim); border-color: var(--accent);
+}
+.toggle input:checked ~ .toggle-track::after {
+  transform: translateX(20px); background: var(--accent);
+}
+
+/* ── Sliders with value label ──────────────────────────────────── */
+.slider-row { margin-bottom: 0.85rem; }
+.slider-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 0.4rem;
+}
+.slider-header label { margin: 0; }
+.slider-val {
+  font-size: 0.78rem; font-weight: 600; color: var(--accent);
+  font-family: ui-monospace, monospace;
+}
+
+/* ── Hint text ─────────────────────────────────────────────────── */
+.hint { font-size: 0.76rem; color: var(--muted); line-height: 1.5; margin-top: 0.3rem; }
+
+/* ── Section dividers ──────────────────────────────────────────── */
+.section-title {
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted);
+  padding-bottom: 0.5rem; border-bottom: 1px solid var(--border);
+  margin-bottom: 0.75rem; margin-top: 1.25rem;
+}
+.section-title:first-child { margin-top: 0; }
+
+/* ── Layout segmented (settings) ──────────────────────────────── */
+.layout-seg { display: flex; gap: 0.4rem; }
+.layout-btn {
+  flex: 1; min-height: 38px; border-radius: 8px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  color: var(--muted); font-size: 0.82rem; font-weight: 500;
+  transition: var(--transition);
+}
+.layout-btn.active {
+  background: var(--accent-dim); border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── HID identity ──────────────────────────────────────────────── */
+#hidSection { /* shown via JS for USB only */ }
+.hid-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+
+/* ── Drop zone (OTA / UI upload) ───────────────────────────────── */
+.drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius); padding: 1.5rem 1rem;
+  text-align: center; cursor: pointer;
+  transition: var(--transition);
+}
+.drop-zone.drag-over, .drop-zone:hover {
+  border-color: var(--accent); background: var(--accent-dim);
+}
+.drop-zone p { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.5rem; }
+.drop-zone input[type="file"] { display: none; }
+
+/* ── OTA progress bar ──────────────────────────────────────────── */
+#otaProgressWrap {
+  background: var(--bg-input); border-radius: 4px;
+  overflow: hidden; height: 6px; margin: 0.5rem 0;
+  display: none;
+}
+#otaBar {
+  height: 100%; width: 0%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+/* ── Toast notifications ───────────────────────────────────────── */
+#toasts {
+  position: fixed; bottom: 1rem; right: 1rem; z-index: 9999;
+  display: flex; flex-direction: column-reverse; gap: 0.4rem;
+  pointer-events: none; max-width: 320px;
+}
+.toast {
+  padding: 0.7rem 1rem; border-radius: 8px;
+  font-size: 0.82rem; line-height: 1.4;
+  animation: toastIn 0.18s ease;
+  pointer-events: auto;
+}
+@keyframes toastIn {
+  from { transform: translateX(12px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+.toast.info    { background: #0a1f1a; border: 1px solid var(--accent);  color: var(--accent); }
+.toast.success { background: #0a1a10; border: 1px solid #4ade80; color: #4ade80; }
+.toast.warn    { background: #1f1500; border: 1px solid var(--warn);  color: var(--warn); }
+.toast.error   { background: #1f0a10; border: 1px solid var(--error); color: var(--error); }
+
+/* ── Device info card ──────────────────────────────────────────── */
+#deviceInfoFull {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem; color: var(--muted); line-height: 1.8;
+}
+
+/* ── Mobile tab bar at bottom ──────────────────────────────────── */
+@media (max-width: 520px) {
+  #tab-bar {
+    top: auto; bottom: 0; border-top: 1px solid var(--border); border-bottom: none;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  #app-header { padding: 0 0.75rem; }
+  #header-stats { font-size: 0.65rem; }
+  #main {
+    margin-top: var(--header-h);
+    padding-bottom: calc(var(--tabs-h) + 1rem + env(safe-area-inset-bottom, 0));
+  }
+  .hid-grid { grid-template-columns: 1fr; }
+}
+@media (min-width: 521px) {
+  #main { padding-top: calc(var(--tabs-h) + 1rem); margin-top: var(--header-h); }
+}
 </style>
 </head>
 <body>
-<h1>ESP32 Paste Dongle</h1>
-<p id="deviceInfoBar" style="color:#888;font-size:0.85em;margin:-0.8em 0 1em;">Connecting...</p>
 
-<section id="bleSection">
-<h2>Bluetooth name</h2>
-<p class="hint">The name your device advertises over Bluetooth LE. Your host computer sees it as a keyboard with this name — useful for disguising the dongle as a known device. Requires a reboot to take effect.</p>
-<p>Current name: <strong id="cur">...</strong></p>
-<form id="cfgform">
-  <label for="name">Advertise as</label>
-  <input type="text" id="name" name="name" maxlength="31" placeholder="e.g. Logitech K380">
-  <button type="submit">Save &amp; Reboot</button>
-</form>
-</section>
+<!-- ── HEADER ──────────────────────────────────────────────────── -->
+<header id="app-header">
+  <div id="statusOrb" title="Device status"></div>
+  <span id="header-brand">PasteDongle</span>
+  <span id="deviceInfoBar" class="header-stats">Connecting…</span>
+  <button id="themeBtn" title="Toggle theme" aria-label="Toggle light/dark theme">🌙</button>
+</header>
 
-<h2>Keyboard layout</h2>
-<p class="hint">Must match the keyboard layout configured in your host OS (System Settings → Keyboard). If this is wrong, characters like <code>@</code> <code>"</code> <code>#</code> and <code>\</code> will be typed incorrectly. When in doubt, use US.</p>
-<p>Active layout: <strong id="layoutCur">US</strong></p>
-<form id="layoutForm">
-  <label for="layout">Host OS layout</label>
-  <select id="layout">
-    <option value="US">US QWERTY</option>
-    <option value="UK">UK QWERTY</option>
-    <option value="DVORAK">Dvorak</option>
+<!-- ── TAB BAR ─────────────────────────────────────────────────── -->
+<nav id="tab-bar" role="tablist">
+  <button class="tab-btn active" data-tab="paste" role="tab">
+    <span class="tab-icon">📋</span>Paste
+  </button>
+  <button class="tab-btn" data-tab="macros" role="tab">
+    <span class="tab-icon">🔧</span>Macros
+  </button>
+  <button class="tab-btn" data-tab="tools" role="tab">
+    <span class="tab-icon">🖱</span>Tools
+  </button>
+  <button class="tab-btn" data-tab="settings" role="tab">
+    <span class="tab-icon">⚙</span>Settings
+  </button>
+</nav>
+
+<!-- ── MAIN CONTENT ────────────────────────────────────────────── -->
+<main id="main">
+
+<!-- ══════════════ TAB 1: PASTE ══════════════ -->
+<div class="tab-panel active" id="tab-paste">
+
+  <!-- Clipboard + Layout row -->
+  <div id="pasteTopRow">
+    <button class="btn btn-sm" id="clipBtn" title="Paste from clipboard">📋 Clipboard</button>
+    <span class="spacer"></span>
+    <select id="layoutCompact" title="Host OS keyboard layout" aria-label="Keyboard layout">
+      <option value="US">US</option>
+      <option value="UK">UK</option>
+      <option value="DVORAK">Dvorak</option>
+    </select>
+  </div>
+
+  <!-- Textarea with drag-drop -->
+  <div id="textWrap">
+    <textarea id="text" rows="10" placeholder="Paste text here or drag a file…" spellcheck="false" autocomplete="off"></textarea>
+    <div id="dropHint">📁 Drop file to load</div>
+  </div>
+
+  <!-- Stats bar -->
+  <div id="statsBar">
+    <span id="stats">0 chars</span>
+    <span id="charWarn" style="display:none"></span>
+  </div>
+
+  <!-- Speed segmented control -->
+  <div class="speed-seg" role="group" aria-label="Typing speed">
+    <button class="speed-btn" data-speed="max">⚡ Max</button>
+    <button class="speed-btn active" data-speed="fast">⌨ Fast</button>
+    <button class="speed-btn" data-speed="human">🧑 Human</button>
+  </div>
+  <!-- Hidden select for backward compat -->
+  <select id="mode" style="display:none" aria-hidden="true">
+    <option value="max">Max Speed</option>
+    <option value="fast" selected>Fast</option>
+    <option value="human">Human</option>
   </select>
-  <p class="hint">Changes take effect immediately — no reboot needed.</p>
-  <button type="submit">Save layout</button>
-</form>
 
-<h2>Paste into host computer</h2>
-<p class="hint">Paste text below, then tap <strong>Paste it</strong>. The dongle types it into whatever window is focused on the connected computer. Make sure your target text field is focused before pressing the button.</p>
+  <!-- CTA button -->
+  <button id="pasteBtn"><span>Type it &nbsp;⌘↵</span></button>
 
-<label for="mode">Typing speed</label>
-<select id="mode">
-  <option value="max">Max Speed — as fast as the host can accept (may drop chars in slow apps)</option>
-  <option value="fast" selected>Fast Typist — ~120 WPM with slight variation (recommended)</option>
-  <option value="human">Human / Careful — ~70 WPM, more variation, safer for web forms</option>
-</select>
+  <!-- Live echo strip -->
+  <div id="echoStrip" aria-live="polite"></div>
 
-<label for="text">Text to type</label>
-<textarea id="text" rows="10" placeholder="Paste your text here…"></textarea>
-<p id="stats">0 chars — estimated time: -</p>
-<p id="charWarn" style="display:none; color:#c05000; margin:0.25em 0 0;"></p>
+  <!-- Status + cancel -->
+  <p id="pasteStatus" style="font-size:.82rem;color:var(--muted);margin:.4rem 0 0;min-height:1.2em;"></p>
+  <div id="cancelRow">
+    <button id="cancelBtn" disabled>Cancel paste</button>
+  </div>
 
-<button id="pasteBtn">Paste it</button>
-<button id="cancelBtn" disabled>Cancel</button>
+  <!-- Progress bar (hidden element kept for JS compat) -->
+  <div id="progressWrap" style="display:none;"><div id="progressBar"></div></div>
 
-<div id="progressWrap" style="display:none; margin-top:1em;">
-  <div id="progressBar"></div>
-</div>
-<p class="status" id="pasteStatus">Connecting...</p>
-
-<h2>Saved snippets</h2>
-<p class="hint">Store up to 8 frequently-used text blocks. Hit <strong>Type</strong> to send one immediately without opening the paste area. Use <strong>Edit</strong> to change a snippet's content. Snippets survive reboots.</p>
-<div id="snippetList"><em>Loading...</em></div>
-<button id="saveSnippetBtn">Save current text as snippet</button>
-<div id="snippetEditArea" style="display:none;margin-top:0.8em;" class="card">
-  <strong>Edit snippet</strong>
-  <label for="editTitle" style="margin-top:0.6em;">Title</label>
-  <input type="text" id="editTitle" maxlength="64">
-  <label for="editText" style="margin-top:0.4em;">Text</label>
-  <textarea id="editText" rows="6"></textarea>
-  <div style="margin-top:0.4em;">
-    <button id="saveEditBtn">Save</button>
-    <button id="cancelEditBtn">Cancel</button>
+  <!-- Paste history -->
+  <div id="histSection" style="margin-top:1rem;">
+    <h3>Recent</h3>
+    <div id="histChips"></div>
   </div>
 </div>
 
-<h2>Macros</h2>
-<p class="hint">Run a sequence of key presses, text, and delays from a simple script. Useful for login sequences, keyboard shortcuts, or anything that needs precise timing. The macro runs on the device — your target window must be focused.</p>
+<!-- ══════════════ TAB 2: MACROS ══════════════ -->
+<div class="tab-panel" id="tab-macros">
 
-<div class="card">
-  <details>
+  <!-- Macro editor -->
+  <p class="section-title">Macro Script</p>
+  <div id="macroEditorWrap">
+    <div id="macroLineNums">1</div>
+    <textarea id="macroScript" rows="8" placeholder="STRING Hello world&#10;DELAY 200&#10;ENTER" spellcheck="false"></textarea>
+  </div>
+  <p id="macroDuration" aria-live="polite">Estimated duration: —</p>
+  <div class="macro-actions">
+    <button class="btn btn-primary" id="macroRunBtn">▶ Run &nbsp;⌘↵</button>
+    <button class="btn" id="macroCancelBtn" disabled>✕ Cancel</button>
+  </div>
+  <p id="macroStatus"></p>
+
+  <!-- Syntax reference -->
+  <details id="macroRef">
     <summary>Script syntax reference</summary>
-    <table class="macro-ref" style="margin-top:0.6em;width:100%;border-collapse:collapse;">
-      <tr><td><code>STRING Hello World</code></td><td class="hint">Type text literally, character by character</td></tr>
-      <tr><td><code>DELAY 500</code></td><td class="hint">Pause for 500 milliseconds</td></tr>
-      <tr><td><code>ENTER</code></td><td class="hint">Press Enter / Return</td></tr>
-      <tr><td><code>TAB</code></td><td class="hint">Tab key</td></tr>
-      <tr><td><code>ESC</code></td><td class="hint">Escape</td></tr>
-      <tr><td><code>BACKSPACE</code></td><td class="hint">Backspace</td></tr>
-      <tr><td><code>SPACE</code></td><td class="hint">Space bar</td></tr>
-      <tr><td><code>UP</code> / <code>DOWN</code> / <code>LEFT</code> / <code>RIGHT</code></td><td class="hint">Arrow keys</td></tr>
-      <tr><td><code>F1</code> … <code>F12</code></td><td class="hint">Function keys</td></tr>
-      <tr><td><code>HOME</code> / <code>END</code></td><td class="hint">Home and End keys</td></tr>
-      <tr><td><code>PAGEUP</code> / <code>PAGEDOWN</code></td><td class="hint">Page Up / Page Down</td></tr>
-      <tr><td><code>DELETE</code> / <code>INSERT</code></td><td class="hint">Delete and Insert keys</td></tr>
-      <tr><td><code>MOD_KEY CTRL c</code></td><td class="hint">Ctrl+C (copy)</td></tr>
-      <tr><td><code>MOD_KEY CTRL v</code></td><td class="hint">Ctrl+V (paste)</td></tr>
-      <tr><td><code>MOD_KEY SHIFT ENTER</code></td><td class="hint">Shift+Enter</td></tr>
-      <tr><td><code>MOD_KEY GUI r</code></td><td class="hint">Win+R / Cmd+R</td></tr>
-      <tr><td><code>MOD_KEY CTRL ALT DEL</code></td><td class="hint">Three-finger salute</td></tr>
+    <table class="ref-table">
+      <tr><td>STRING Hello world</td><td>Type text character by character</td></tr>
+      <tr><td>DELAY 500</td><td>Pause 500 ms</td></tr>
+      <tr><td>ENTER</td><td>Press Enter / Return</td></tr>
+      <tr><td>TAB</td><td>Tab key</td></tr>
+      <tr><td>ESC</td><td>Escape</td></tr>
+      <tr><td>BACKSPACE</td><td>Backspace</td></tr>
+      <tr><td>SPACE</td><td>Space bar</td></tr>
+      <tr><td>UP / DOWN / LEFT / RIGHT</td><td>Arrow keys</td></tr>
+      <tr><td>F1 … F12</td><td>Function keys</td></tr>
+      <tr><td>HOME / END</td><td>Home and End</td></tr>
+      <tr><td>PAGEUP / PAGEDOWN</td><td>Page Up / Down</td></tr>
+      <tr><td>DELETE / INSERT</td><td>Delete and Insert</td></tr>
+      <tr><td>MOD_KEY CTRL c</td><td>Ctrl+C (copy)</td></tr>
+      <tr><td>MOD_KEY CTRL v</td><td>Ctrl+V (paste)</td></tr>
+      <tr><td>MOD_KEY SHIFT ENTER</td><td>Shift+Enter</td></tr>
+      <tr><td>MOD_KEY GUI r</td><td>Win+R / Cmd+R</td></tr>
+      <tr><td>MOD_KEY CTRL ALT DEL</td><td>Three-finger salute</td></tr>
     </table>
-    <p class="hint" style="margin-top:0.6em;">Special keys are bare keywords on their own line — no <code>KEY</code> prefix. Modifiers: <code>CTRL</code> <code>SHIFT</code> <code>ALT</code> <code>GUI</code> (Windows key / Cmd). One command per line.</p>
   </details>
-</div>
 
-<label for="macroScript">Script</label>
-<textarea id="macroScript" rows="7" placeholder="STRING Hello&#10;DELAY 200&#10;KEY ENTER"></textarea>
+  <!-- Snippets -->
+  <p class="section-title" style="margin-top:1.5rem;">Saved Snippets</p>
+  <div id="snippetTopRow">
+    <input type="text" id="snippetSearch" placeholder="Search snippets…">
+    <button class="btn btn-sm" id="saveSnippetBtn" title="Save current paste text as snippet">＋ New</button>
+  </div>
+  <div id="snippetList"><p style="color:var(--muted);font-size:.85rem;">Loading…</p></div>
 
-<button id="macroRunBtn">Run macro</button>
-<button id="macroCancelBtn" disabled>Cancel</button>
-<p class="status" id="macroStatus"></p>
-
-<h2>Human simulation</h2>
-<p class="hint">Keeps your session alive on applications that track <em>keyboard</em> activity separately from mouse movement (e.g. some VPNs, remote desktop clients, meeting tools). The dongle types random words and erases them in a loop — it looks like someone is at the keyboard.</p>
-<p class="status" id="simStatus">Loading...</p>
-<label><input type="checkbox" id="simEnabled"> Enable human simulation</label>
-<p class="hint">Only runs when the paste and macro engine are both idle. Will not interfere with real pastes.</p>
-
-<label for="simPause">Pause between bursts (seconds)</label>
-<input type="number" id="simPause" min="5" max="300" value="18">
-<p class="hint">How long the dongle stays quiet between bursts. 18 s is a good default — long enough to be subtle, short enough to prevent idle timeouts on most systems.</p>
-
-<label for="simWords">Words per burst</label>
-<input type="number" id="simWords" min="2" max="20" value="8">
-<p class="hint">How many words to type before erasing. More words = longer visible activity periods.</p>
-
-<label for="simCharDelay">Typing speed: <span id="simCharDelayVal">130</span> ms/char (~<span id="simCharDelayWpm">92</span> WPM)</label>
-<input type="range" id="simCharDelay" min="40" max="300" value="130">
-<p class="hint">How fast the simulation types each character. Slower speeds look more human; faster speeds are less noticeable but may look odd if the cursor is visible. 100–150 ms/char is the natural human range.</p>
-
-<button id="simSaveBtn">Save simulation settings</button>
-
-<h2>Mouse jiggler</h2>
-<p class="hint">Moves the mouse cursor periodically to prevent screen lock, sleep, or idle timeouts. The <strong>Natural</strong> mode is specifically designed to be undetectable by anti-idle software.</p>
-<p id="jiggleStatus" class="status">Loading...</p>
-<label><input type="checkbox" id="jiggleEnabled"> Enable mouse jiggler</label>
-
-<label for="jigglePattern" style="margin-top:0.8em;">Mode</label>
-<select id="jigglePattern">
-  <option value="natural">Natural — Poisson intervals + organic drift (recommended)</option>
-  <option value="random">Random jumps (simple, somewhat detectable)</option>
-  <option value="line">Line (back and forth — very detectable)</option>
-  <option value="square">Square (geometric — very detectable)</option>
-  <option value="circle">Circle (geometric — very detectable)</option>
-</select>
-
-<div id="naturalControls">
-  <div class="card" style="margin-top:0.6em;">
-    <label for="jiggleMeanInterval">Mean interval (seconds)</label>
-    <input type="number" id="jiggleMeanInterval" min="5" max="600" value="30">
-    <p class="hint">The average time between movements. Each actual interval is drawn from a Poisson process — sometimes shorter, sometimes much longer — so there is no detectable heartbeat pattern.</p>
-
-    <label for="jiggleDriftRadius" style="margin-top:0.8em;">Drift radius (pixels): <span id="jiggleDriftRadiusVal">5</span></label>
-    <input type="range" id="jiggleDriftRadius" min="1" max="20" value="5">
-    <p class="hint">Maximum distance the cursor wanders from its starting position. 1–5 px is invisible on a normal monitor at arm's length.</p>
-
-    <label for="jiggleJitter" style="margin-top:0.8em;">Jitter level: <span id="jiggleJitterVal">50</span>%</label>
-    <input type="range" id="jiggleJitter" min="0" max="100" value="50">
-    <p class="hint">How much random noise per movement step. 0% = barely drifts. 100% = actively wanders. 40–60% is the sweet spot.</p>
+  <!-- Snippet edit panel -->
+  <div id="snippetEditArea">
+    <h4>✏ Edit Snippet</h4>
+    <label for="editTitle">Title</label>
+    <input type="text" id="editTitle" maxlength="64" style="margin-bottom:.6rem;">
+    <label for="editText">Text</label>
+    <textarea id="editText" rows="6" style="font-family:ui-monospace,monospace;font-size:.82rem;"></textarea>
+    <div class="edit-actions">
+      <button class="btn btn-primary" id="saveEditBtn">Save</button>
+      <button class="btn" id="cancelEditBtn">Cancel</button>
+    </div>
   </div>
 </div>
 
-<div id="geometricControls" style="display:none;">
-  <div class="card" style="margin-top:0.6em;">
-    <label for="jiggleInterval">Interval (seconds)</label>
-    <input type="number" id="jiggleInterval" min="1" max="600" value="30">
-    <p class="hint">Time between cursor movements. Fixed intervals are easy for detection software to identify.</p>
+<!-- ══════════════ TAB 3: TOOLS ══════════════ -->
+<div class="tab-panel" id="tab-tools">
 
-    <label for="jiggleDistance" style="margin-top:0.8em;">Distance (pixels): <span id="jiggleDistVal">2</span></label>
-    <input type="range" id="jiggleDistance" min="1" max="50" value="2">
-    <p class="hint">How far the cursor moves each step. Visible movement begins around 10 px on a typical screen.</p>
+  <!-- Jiggler card -->
+  <p class="section-title">Mouse Jiggler</p>
+  <div class="card">
+    <p id="jiggleStatus" style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem;">Loading…</p>
 
-    <label style="margin-top:0.8em;"><input type="checkbox" id="jiggleRandomize"> Randomize interval (±25%)</label>
-    <p class="hint">Adds slight variation to the interval. Better than fully fixed, but still detectable with enough samples.</p>
-  </div>
-</div>
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Enable jiggler</div>
+        <div class="toggle-sub">Moves mouse to prevent idle/lock</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="jiggleEnabled">
+        <span class="toggle-track"></span>
+      </label>
+    </div>
 
-<button id="jiggleSaveBtn" style="margin-top:0.6em;">Save jiggler settings</button>
+    <div style="margin:.75rem 0 .5rem;">
+      <label for="jigglePattern">Mode</label>
+      <select id="jigglePattern">
+        <option value="natural">Natural — Poisson + organic drift (recommended)</option>
+        <option value="random">Random jumps</option>
+        <option value="line">Line (detectable)</option>
+        <option value="square">Square (detectable)</option>
+        <option value="circle">Circle (detectable)</option>
+      </select>
+    </div>
 
-<section id="hidSection" style="display:none;">
-<h2>HID Identity</h2>
-<p class="hint">Change how this device appears to the host OS — the manufacturer, product name, and USB vendor/product IDs. Pick a preset to impersonate a common keyboard or mouse, or enter custom values. <strong>Requires a reboot to take effect.</strong></p>
-<p class="hint" style="color:#b05000;">Using another manufacturer's VID/PID is fine for personal use. Do not distribute firmware with cloned IDs.</p>
-
-<label for="hidPreset">Preset profile</label>
-<select id="hidPreset">
-  <optgroup label="Keyboards">
-    <option value="generic_kb">Generic HID Keyboard (default)</option>
-    <option value="k380">Logitech K380 Multi-Device Keyboard</option>
-    <option value="mx_keys">Logitech MX Keys</option>
-    <option value="magic_kb">Apple Magic Keyboard</option>
-    <option value="dell_kb216">Dell KB216 Keyboard</option>
-  </optgroup>
-  <optgroup label="Mice (for jiggler use)">
-    <option value="mx_master">Logitech MX Master 3</option>
-    <option value="magic_mouse">Apple Magic Mouse 2</option>
-    <option value="g502">Logitech G502 Gaming Mouse</option>
-  </optgroup>
-  <optgroup label="Other">
-    <option value="custom">Custom</option>
-  </optgroup>
-</select>
-<p class="hint" id="hidPresetHint"></p>
-
-<div class="card" style="margin-top:0.6em;">
-  <label for="hidVid">Vendor ID (hex, 4 digits)</label>
-  <input type="text" id="hidVid" maxlength="4" placeholder="e.g. 046D" style="font-family:monospace;">
-
-  <label for="hidPid" style="margin-top:0.6em;">Product ID (hex, 4 digits)</label>
-  <input type="text" id="hidPid" maxlength="4" placeholder="e.g. B342" style="font-family:monospace;">
-
-  <label for="hidMfr" style="margin-top:0.6em;">Manufacturer string</label>
-  <input type="text" id="hidMfr" maxlength="63" placeholder="e.g. Logitech">
-
-  <label for="hidProd" style="margin-top:0.6em;">Product string</label>
-  <input type="text" id="hidProd" maxlength="63" placeholder="e.g. K380 Multi-Device Keyboard">
-</div>
-
-<button id="hidSaveBtn">Save &amp; Reboot</button>
-<p class="status" id="hidStatus"></p>
-</section>
-
-<h2>Device &amp; firmware</h2>
-<p class="hint">Live stats for the connected dongle. Free heap below ~80 kB may cause instability; if you see it drop that low, reboot.</p>
-<p class="status" id="deviceInfoFull">Loading...</p>
-<button id="rebootBtn">Reboot device</button>
-<p class="hint" style="margin-top:0.3em;">Performs a clean software reboot. Settings and snippets are preserved. The Wi-Fi AP will disappear for ~8 seconds while it restarts.</p>
-<p class="status" id="rebootStatus"></p>
-
-<h3 style="margin-top:1.4em;border-top:1px solid #ddd;padding-top:0.8em;">Update UI (no reboot needed)</h3>
-<p class="hint">Upload a new <code>index.html</code> to the device filesystem. The page reloads immediately — no firmware reflash required. Useful when iterating on the UI.</p>
-<form id="uiUploadForm">
-  <label for="uiFile">index.html file</label>
-  <input type="file" id="uiFile" accept=".html" style="padding:0.3em 0;">
-  <button type="submit" id="uiUploadBtn" style="margin-top:0.4em;">Upload UI</button>
-</form>
-<p class="status" id="uiUploadStatus"></p>
-
-<h3 style="margin-top:1.4em;border-top:1px solid #ddd;padding-top:0.8em;">Update firmware (OTA)</h3>
-<p class="hint">Build in VS Code (PlatformIO → Build), then pick <code>.pio/build/esp32s3-usb/firmware.bin</code>. The dongle writes to the standby OTA slot and reboots — your previous firmware is kept. The page reloads automatically after ~12 seconds.</p>
-<form id="otaForm">
-  <label for="otaFile">Firmware binary (.bin)</label>
-  <input type="file" id="otaFile" accept=".bin" style="padding:0.3em 0;">
-  <button type="submit" id="otaBtn" style="margin-top:0.4em;">Upload &amp; reboot</button>
-</form>
-<div id="otaProgressWrap" style="display:none;margin-top:0.6em;">
-  <div id="otaBar" style="height:1.2em;width:0%;background:#007bff;border-radius:0.25em;transition:width 0.3s;"></div>
-</div>
-<p class="status" id="otaStatus"></p>
-
-<script>
-const curEl = document.getElementById('cur');
-const nameEl = document.getElementById('name');
-const textEl = document.getElementById('text');
-const modeEl = document.getElementById('mode');
-const statsEl = document.getElementById('stats');
-const pasteBtn = document.getElementById('pasteBtn');
-const cancelBtn = document.getElementById('cancelBtn');
-const progressWrap = document.getElementById('progressWrap');
-const progressBar = document.getElementById('progressBar');
-const statusEl = document.getElementById('pasteStatus');
-
-const WPM = { max: 600, fast: 120, human: 70 };
-let ws = null;
-let ackResolve = null;
-let running = false;
-let supportedChars = null;
-const charWarnEl = document.getElementById('charWarn');
-
-// ---- Jiggler refs ----------------------------------------------------------
-const jiggleEnabled      = document.getElementById('jiggleEnabled');
-const jiggleInterval     = document.getElementById('jiggleInterval');
-const jiggleMeanInterval = document.getElementById('jiggleMeanInterval');
-const jiggleDistance     = document.getElementById('jiggleDistance');
-const jiggleDriftRadius  = document.getElementById('jiggleDriftRadius');
-const jiggleJitter       = document.getElementById('jiggleJitter');
-const jigglePattern      = document.getElementById('jigglePattern');
-const jiggleRandomize    = document.getElementById('jiggleRandomize');
-const jiggleSaveBtn      = document.getElementById('jiggleSaveBtn');
-const jiggleStatus       = document.getElementById('jiggleStatus');
-
-function updateJiggleMode() {
-  const natural = jigglePattern.value === 'natural';
-  document.getElementById('naturalControls').style.display  = natural ? '' : 'none';
-  document.getElementById('geometricControls').style.display = natural ? 'none' : '';
-}
-jigglePattern.onchange = updateJiggleMode;
-
-// ---- Char warn -------------------------------------------------------------
-function checkUnsupportedChars() {
-  if (!supportedChars) return;
-  const text = textEl.value;
-  let bad = 0;
-  const seen = new Set();
-  for (const ch of text) {
-    if (ch === '\n' || ch === '\r' || ch === '\t') continue;
-    if (!supportedChars.has(ch) && !seen.has(ch)) { bad++; seen.add(ch); }
-  }
-  if (bad > 0) {
-    charWarnEl.textContent = '⚠️ ' + bad + ' character' + (bad > 1 ? 's' : '') +
-      ' not in the ' + (layoutEl ? layoutEl.value : '') +
-      ' layout — they will be approximated or skipped.';
-    charWarnEl.style.display = 'block';
-  } else {
-    charWarnEl.style.display = 'none';
-  }
-}
-
-// ---- Snippet store ---------------------------------------------------------
-const snippetListEl = document.getElementById('snippetList');
-const saveSnippetBtn = document.getElementById('saveSnippetBtn');
-
-function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-async function loadSnippets() {
-  try {
-    const list = await fetch('/api/snippets').then(r => r.json());
-    if (!list.length) { snippetListEl.innerHTML = '<em>No saved snippets.</em>'; return; }
-    snippetListEl.innerHTML = list.map(s =>
-      `<div style="margin:0.6em 0;padding:0.5em;border:1px solid #e0e0e0;border-radius:4px;">
-        <div style="display:flex;gap:0.4em;align-items:center;">
-          <strong style="flex:1;">${escHtml(s.title)}</strong>
-          <small style="color:#888;">${s.chars} chars</small>
-          <button onclick="typeSnippet(${s.id},this)">Type</button>
-          <button onclick="editSnippet(${s.id})">Edit</button>
-          <button onclick="deleteSnippet(${s.id})">Delete</button>
+    <div id="naturalControls">
+      <div style="margin-top:.6rem;padding:.75rem;background:var(--bg-input);border-radius:8px;">
+        <div style="margin-bottom:.6rem;">
+          <label for="jiggleMeanInterval">Mean interval (seconds)</label>
+          <input type="number" id="jiggleMeanInterval" min="5" max="600" value="30">
+          <p class="hint">Intervals are Poisson-distributed — no detectable heartbeat</p>
         </div>
-        ${s.preview ? `<div style="margin-top:0.3em;font-size:0.82em;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(s.preview)}</div>` : ''}
-      </div>`
-    ).join('');
-  } catch(e) { snippetListEl.innerHTML = '<em>Failed to load snippets.</em>'; }
-}
+        <div class="slider-row">
+          <div class="slider-header">
+            <label for="jiggleDriftRadius">Drift radius</label>
+            <span class="slider-val"><span id="jiggleDriftRadiusVal">5</span> px</span>
+          </div>
+          <input type="range" id="jiggleDriftRadius" min="1" max="20" value="5">
+          <p class="hint">1–5 px is invisible on a normal screen</p>
+        </div>
+        <div class="slider-row">
+          <div class="slider-header">
+            <label for="jiggleJitter">Jitter level</label>
+            <span class="slider-val"><span id="jiggleJitterVal">50</span>%</span>
+          </div>
+          <input type="range" id="jiggleJitter" min="0" max="100" value="50">
+          <p class="hint">40–60% is the sweet spot for natural movement</p>
+        </div>
+      </div>
+    </div>
 
-async function typeSnippet(id, btn) {
-  const orig = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Typing…';
-  try {
-    await fetch('/api/snippets/type', { method: 'POST', body: new URLSearchParams({id}) });
-    btn.textContent = 'Sent ✓';
-    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
-  } catch(e) { btn.textContent = orig; btn.disabled = false; }
-}
+    <div id="geometricControls" style="display:none;">
+      <div style="margin-top:.6rem;padding:.75rem;background:var(--bg-input);border-radius:8px;">
+        <div style="margin-bottom:.6rem;">
+          <label for="jiggleInterval">Interval (seconds)</label>
+          <input type="number" id="jiggleInterval" min="1" max="600" value="30">
+        </div>
+        <div class="slider-row">
+          <div class="slider-header">
+            <label for="jiggleDistance">Distance</label>
+            <span class="slider-val"><span id="jiggleDistVal">2</span> px</span>
+          </div>
+          <input type="range" id="jiggleDistance" min="1" max="50" value="2">
+        </div>
+        <div class="toggle-row" style="min-height:36px;">
+          <span style="font-size:.85rem;color:var(--muted);">Randomize interval ±25%</span>
+          <label class="toggle">
+            <input type="checkbox" id="jiggleRandomize">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+      </div>
+    </div>
 
-async function deleteSnippet(id) {
-  if (!confirm('Delete this snippet?')) return;
-  await fetch('/api/snippets?id=' + id, { method: 'DELETE' });
-  loadSnippets();
-}
+    <button class="btn" id="jiggleSaveBtn" style="margin-top:.75rem;width:100%;">Save jiggler</button>
+  </div>
 
-let _editId = -1;
-const snippetEditArea = document.getElementById('snippetEditArea');
-const editTitleEl = document.getElementById('editTitle');
-const editTextEl  = document.getElementById('editText');
+  <!-- Human sim card -->
+  <p class="section-title">Human Simulation</p>
+  <div class="card">
+    <p style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem;">
+      Types random words and erases them to simulate keyboard activity. Runs only when paste and macros are idle.
+    </p>
+    <p id="simStatus" style="font-size:.8rem;color:var(--accent);margin-bottom:.75rem;display:none;"></p>
 
-async function editSnippet(id) {
-  try {
-    const s = await fetch('/api/snippets?id=' + id).then(r => r.json());
-    editTitleEl.value = s.title;
-    editTextEl.value  = s.text;
-    _editId = id;
-    snippetEditArea.style.display = 'block';
-    editTextEl.focus();
-  } catch(e) { alert('Could not load snippet.'); }
-}
+    <div class="toggle-row" style="margin-bottom:.75rem;">
+      <div>
+        <div class="toggle-label">Enable simulation</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="simEnabled">
+        <span class="toggle-track"></span>
+      </label>
+    </div>
 
-document.getElementById('saveEditBtn').onclick = async () => {
-  const title = editTitleEl.value.trim();
-  const text  = editTextEl.value;
-  if (!title) return;
-  await fetch('/api/snippets', { method: 'POST', body: new URLSearchParams({ id: _editId, title, text }) });
-  snippetEditArea.style.display = 'none';
-  _editId = -1;
-  loadSnippets();
+    <div style="margin-bottom:.6rem;">
+      <label for="simPause">Pause between bursts (seconds)</label>
+      <input type="number" id="simPause" min="5" max="300" value="18">
+    </div>
+    <div style="margin-bottom:.6rem;">
+      <label for="simWords">Words per burst</label>
+      <input type="number" id="simWords" min="2" max="20" value="8">
+    </div>
+    <div class="slider-row">
+      <div class="slider-header">
+        <label for="simCharDelay">Typing speed</label>
+        <span class="slider-val"><span id="simCharDelayVal">130</span>ms · ~<span id="simCharDelayWpm">92</span> WPM</span>
+      </div>
+      <input type="range" id="simCharDelay" min="40" max="300" value="130">
+    </div>
+
+    <button class="btn" id="simSaveBtn" style="margin-top:.5rem;width:100%;">Save simulation</button>
+  </div>
+</div>
+
+<!-- ══════════════ TAB 4: SETTINGS ══════════════ -->
+<div class="tab-panel" id="tab-settings">
+
+  <!-- Layout -->
+  <p class="section-title">Keyboard Layout</p>
+  <div class="card">
+    <p class="hint" style="margin-bottom:.75rem;">Must match your host OS keyboard setting (System Settings → Keyboard). Wrong layout = wrong characters.</p>
+    <label>Active layout: <strong id="layoutCur">US</strong></label>
+    <div class="layout-seg" role="group" style="margin-top:.5rem;">
+      <button class="layout-btn active" data-layout="US">US</button>
+      <button class="layout-btn" data-layout="UK">UK</button>
+      <button class="layout-btn" data-layout="DVORAK">Dvorak</button>
+    </div>
+  </div>
+
+  <!-- HID Identity (USB only) -->
+  <div id="hidSection" style="display:none;">
+    <p class="section-title">HID Identity</p>
+    <div class="card">
+      <p class="hint" style="margin-bottom:.75rem;">Change how the dongle appears to the host OS. For personal use only. Requires reboot.</p>
+      <div style="margin-bottom:.6rem;">
+        <label for="hidPreset">Preset</label>
+        <select id="hidPreset">
+          <optgroup label="Keyboards">
+            <option value="generic_kb">Generic HID Keyboard (default)</option>
+            <option value="k380">Logitech K380</option>
+            <option value="mx_keys">Logitech MX Keys</option>
+            <option value="magic_kb">Apple Magic Keyboard</option>
+            <option value="dell_kb216">Dell KB216</option>
+          </optgroup>
+          <optgroup label="Mice">
+            <option value="mx_master">Logitech MX Master 3</option>
+            <option value="magic_mouse">Apple Magic Mouse 2</option>
+            <option value="g502">Logitech G502 Gaming Mouse</option>
+          </optgroup>
+          <optgroup label="Other">
+            <option value="custom">Custom</option>
+          </optgroup>
+        </select>
+        <p class="hint" id="hidPresetHint" style="margin-top:.3rem;"></p>
+      </div>
+      <div class="hid-grid" style="margin-bottom:.6rem;">
+        <div>
+          <label for="hidVid">Vendor ID (hex)</label>
+          <input type="text" id="hidVid" maxlength="4" placeholder="303A" style="font-family:ui-monospace,monospace;">
+        </div>
+        <div>
+          <label for="hidPid">Product ID (hex)</label>
+          <input type="text" id="hidPid" maxlength="4" placeholder="1001" style="font-family:ui-monospace,monospace;">
+        </div>
+      </div>
+      <div style="margin-bottom:.6rem;">
+        <label for="hidMfr">Manufacturer</label>
+        <input type="text" id="hidMfr" maxlength="63">
+      </div>
+      <div style="margin-bottom:.75rem;">
+        <label for="hidProd">Product name</label>
+        <input type="text" id="hidProd" maxlength="63">
+      </div>
+      <button class="btn btn-primary" id="hidSaveBtn" style="width:100%;">Save &amp; Reboot</button>
+      <p id="hidStatus" style="font-size:.8rem;color:var(--muted);margin-top:.4rem;min-height:1em;"></p>
+    </div>
+  </div>
+
+  <!-- BLE Name (BLE only) -->
+  <section id="bleSection" style="display:none;">
+    <p class="section-title">Bluetooth Name</p>
+    <div class="card">
+      <p class="hint" style="margin-bottom:.75rem;">Name advertised over Bluetooth LE. Requires reboot.</p>
+      <p style="font-size:.85rem;margin-bottom:.5rem;">Current: <strong id="cur">…</strong></p>
+      <form id="cfgform">
+        <label for="name">Advertise as</label>
+        <input type="text" id="name" name="name" maxlength="31" placeholder="e.g. Logitech K380" style="margin-bottom:.5rem;">
+        <button type="submit" class="btn btn-primary" style="width:100%;">Save &amp; Reboot</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- Device info -->
+  <p class="section-title">Device</p>
+  <div class="card">
+    <div id="deviceInfoFull" style="margin-bottom:.75rem;">Loading…</div>
+    <button class="btn btn-danger" id="rebootBtn" style="width:100%;">Reboot device</button>
+    <p id="rebootStatus" style="font-size:.8rem;color:var(--muted);margin-top:.4rem;min-height:1em;"></p>
+  </div>
+
+  <!-- UI Upload -->
+  <p class="section-title">Update UI</p>
+  <div class="card">
+    <p class="hint" style="margin-bottom:.75rem;">Upload a new <code style="background:var(--bg-input);padding:.1em .3em;border-radius:4px;">index.html</code> — no firmware reflash, no reboot. Upload and refresh.</p>
+    <div class="drop-zone" id="uiDropZone">
+      <p>Drop index.html here or click to browse</p>
+      <input type="file" id="uiFile" accept=".html">
+      <button class="btn btn-sm" onclick="document.getElementById('uiFile').click()">Browse…</button>
+    </div>
+    <button class="btn" id="uiUploadBtn" style="width:100%;margin-top:.5rem;" disabled>Upload UI</button>
+    <p id="uiUploadStatus" style="font-size:.8rem;color:var(--muted);margin-top:.4rem;min-height:1em;"></p>
+    <form id="uiUploadForm" style="display:none;"></form>
+  </div>
+
+  <!-- OTA Firmware -->
+  <p class="section-title">Update Firmware (OTA)</p>
+  <div class="card">
+    <p class="hint" style="margin-bottom:.75rem;">Build in VS Code, pick <code style="background:var(--bg-input);padding:.1em .3em;border-radius:4px;">.pio/build/esp32s3-usb/firmware.bin</code>. Writes to standby OTA slot, reboots. Page reloads in ~12 s.</p>
+    <div class="drop-zone" id="otaDropZone">
+      <p>Drop firmware.bin here or click to browse</p>
+      <input type="file" id="otaFile" accept=".bin">
+      <button class="btn btn-sm" onclick="document.getElementById('otaFile').click()">Browse…</button>
+    </div>
+    <div id="otaProgressWrap"><div id="otaBar"></div></div>
+    <button class="btn btn-primary" id="otaBtn" form="otaForm" style="width:100%;margin-top:.5rem;" disabled>Upload &amp; Reboot</button>
+    <p id="otaStatus" style="font-size:.8rem;color:var(--muted);margin-top:.4rem;min-height:1em;"></p>
+    <form id="otaForm" style="display:none;"></form>
+  </div>
+
+</div><!-- /tab-settings -->
+</main>
+
+<!-- ── TOASTS ───────────────────────────────────────────────────── -->
+<div id="toasts" aria-live="assertive"></div>
+
+<!-- ── JAVASCRIPT ──────────────────────────────────────────────── -->
+<script>
+'use strict';
+
+/* ── Constants ──────────────────────────────────────────────────── */
+const WPM = { max: 600, fast: 120, human: 70 };
+const HID_PRESETS = {
+  generic_kb:  { vid:'303A', pid:'1001', mfr:'Espressif',  prod:'USB HID Keyboard',           hint:'Default Espressif identity.' },
+  k380:        { vid:'046D', pid:'B342', mfr:'Logitech',   prod:'K380 Multi-Device Keyboard', hint:'Common wireless keyboard — widely trusted.' },
+  mx_keys:     { vid:'046D', pid:'B35B', mfr:'Logitech',   prod:'MX Keys',                   hint:'Popular office keyboard.' },
+  magic_kb:    { vid:'05AC', pid:'0267', mfr:'Apple Inc.', prod:'Magic Keyboard',             hint:'Apple Magic Keyboard (USB).' },
+  dell_kb216:  { vid:'413C', pid:'2113', mfr:'Dell Inc.',  prod:'Dell USB Keyboard',         hint:'Ubiquitous office keyboard.' },
+  mx_master:   { vid:'046D', pid:'B023', mfr:'Logitech',   prod:'MX Master 3',               hint:'Mouse-forward — best for jiggler use.' },
+  magic_mouse: { vid:'05AC', pid:'0269', mfr:'Apple Inc.', prod:'Magic Mouse 2',             hint:'Mouse identity.' },
+  g502:        { vid:'046D', pid:'C08B', mfr:'Logitech',   prod:'G502 HERO Gaming Mouse',    hint:'Gaming mouse identity.' },
+  custom:      { vid:null,   pid:null,   mfr:null,          prod:null,                         hint:'Enter custom values below.' },
 };
 
-document.getElementById('cancelEditBtn').onclick = () => {
-  snippetEditArea.style.display = 'none';
-  _editId = -1;
-};
+/* ── State ──────────────────────────────────────────────────────── */
+let ws = null, ackResolve = null, running = false, supportedChars = null;
+let wsRetryDelay = 2000;
+let pasteText = '';
 
-saveSnippetBtn.onclick = async () => {
-  const text = textEl.value.trim();
-  if (!text) { alert('Type or paste some text first.'); return; }
-  const title = prompt('Snippet name:', 'Snippet ' + Date.now());
-  if (!title) return;
-  const list = await fetch('/api/snippets').then(r => r.json());
-  const usedIds = new Set(list.map(s => s.id));
-  let slot = -1;
-  for (let i = 0; i < 8; i++) { if (!usedIds.has(i)) { slot = i; break; } }
-  if (slot < 0) { alert('All 8 snippet slots are full. Delete one first.'); return; }
-  await fetch('/api/snippets', { method: 'POST', body: new URLSearchParams({ id: slot, title, text }) });
-  loadSnippets();
-};
-
-// ---- Macro UI --------------------------------------------------------------
-const macroRunBtn    = document.getElementById('macroRunBtn');
-const macroCancelBtn = document.getElementById('macroCancelBtn');
-const macroStatusEl  = document.getElementById('macroStatus');
-const macroScriptEl  = document.getElementById('macroScript');
-
-macroRunBtn.onclick = async () => {
-  const script = macroScriptEl.value.trim();
-  if (!script) { macroStatusEl.textContent = 'Enter a script first.'; return; }
-  macroRunBtn.disabled = true;
-  macroCancelBtn.disabled = false;
-  macroStatusEl.textContent = 'Running on device…';
-  try {
-    const r = await fetch('/api/macro/run', {
-      method: 'POST',
-      body: new URLSearchParams({ script })
-    });
-    const j = await r.json();
-    if (!j.ok) macroStatusEl.textContent = 'Error: ' + (j.error || 'unknown');
-  } catch(e) {
-    macroStatusEl.textContent = 'Request failed: ' + e;
-  }
-  // Re-enable after 5 s — we have no completion signal yet
-  setTimeout(() => {
-    macroRunBtn.disabled = false;
-    macroCancelBtn.disabled = true;
-    if (macroStatusEl.textContent.startsWith('Running'))
-      macroStatusEl.textContent = 'Done (or use Cancel if still running).';
-  }, 5000);
-};
-
-macroCancelBtn.onclick = async () => {
-  try { await fetch('/api/macro/cancel', { method: 'POST' }); } catch(_) {}
-  macroStatusEl.textContent = 'Cancelled.';
-  macroRunBtn.disabled = false;
-  macroCancelBtn.disabled = true;
-};
-
-// ---- Human simulation ------------------------------------------------------
-const simStatusEl    = document.getElementById('simStatus');
-const simEnabledEl   = document.getElementById('simEnabled');
-const simPauseEl     = document.getElementById('simPause');
-const simWordsEl     = document.getElementById('simWords');
-const simCharDelayEl = document.getElementById('simCharDelay');
-const simSaveBtn     = document.getElementById('simSaveBtn');
-
-function updateSimCharDelayLabel() {
-  const ms = parseInt(simCharDelayEl.value, 10) || 130;
-  document.getElementById('simCharDelayVal').textContent = ms;
-  document.getElementById('simCharDelayWpm').textContent = Math.round(12000 / ms);
-}
-simCharDelayEl.oninput = updateSimCharDelayLabel;
-
-async function loadSimConfig() {
-  try {
-    const j = await fetch('/api/sim').then(r => r.json());
-    simEnabledEl.checked = j.enabled;
-    simPauseEl.value = Math.round(j.pause_ms / 1000);
-    simWordsEl.value = j.words_per_burst;
-    simCharDelayEl.value = j.char_delay_ms || 130;
-    updateSimCharDelayLabel();
-    simStatusEl.textContent = j.enabled
-      ? 'Active — typing random words and erasing them to simulate activity.'
-      : 'Inactive.';
-  } catch(e) { simStatusEl.textContent = 'Failed to load.'; }
+/* ── Toast ──────────────────────────────────────────────────────── */
+function toast(msg, type = 'info', ms = 3200) {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.getElementById('toasts').prepend(el);
+  setTimeout(() => el.remove(), ms);
 }
 
-simSaveBtn.onclick = async () => {
-  const params = new URLSearchParams({
-    enabled:         simEnabledEl.checked ? '1' : '0',
-    pause_ms:        String(Math.max(5, parseInt(simPauseEl.value,10) || 18) * 1000),
-    words_per_burst: String(Math.max(2, Math.min(20, parseInt(simWordsEl.value,10) || 8))),
-    char_delay_ms:   String(Math.max(40, Math.min(300, parseInt(simCharDelayEl.value,10) || 130))),
-  });
-  await fetch('/api/sim', { method: 'POST', body: params });
-  await loadSimConfig();
+/* ── Status Orb ─────────────────────────────────────────────────── */
+function setOrbState(state) {
+  const orb = document.getElementById('statusOrb');
+  orb.className = state || '';
+  orb.title = {
+    '': 'Idle', 'typing': 'Typing…', 'jiggling': 'Jiggler active',
+    'sim': 'Human sim active', 'no-host': 'USB host not connected', 'error': 'Error'
+  }[state] || state;
+}
+
+/* ── Theme ──────────────────────────────────────────────────────── */
+(function initTheme() {
+  const saved = localStorage.getItem('pd_theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', saved);
+  document.getElementById('themeBtn').textContent = saved === 'dark' ? '🌙' : '☀️';
+})();
+document.getElementById('themeBtn').onclick = () => {
+  const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', cur);
+  localStorage.setItem('pd_theme', cur);
+  document.getElementById('themeBtn').textContent = cur === 'dark' ? '🌙' : '☀️';
 };
 
-// ---- Supported chars -------------------------------------------------------
+/* ── Tabs ───────────────────────────────────────────────────────── */
+function switchTab(id) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${id}`));
+  localStorage.setItem('pd_tab', id);
+}
+document.querySelectorAll('.tab-btn').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+(function restoreTab() {
+  const saved = localStorage.getItem('pd_tab') || 'paste';
+  switchTab(saved);
+})();
+
+/* ── Layout compact select (paste tab) ─────────────────────────── */
+const layoutCompactEl = document.getElementById('layoutCompact');
+const layoutCurEl     = document.getElementById('layoutCur');
+fetch('/api/layout').then(r=>r.json()).then(j => {
+  const v = (j.layout||'US').toUpperCase();
+  layoutCompactEl.value = v;
+  layoutCurEl.textContent = v;
+  // sync settings tab layout buttons
+  document.querySelectorAll('.layout-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.layout === v));
+}).catch(()=>{});
+layoutCompactEl.onchange = async () => {
+  const v = layoutCompactEl.value;
+  await fetch('/api/layout', { method:'POST', body:`layout=${encodeURIComponent(v)}` });
+  layoutCurEl.textContent = v;
+  document.querySelectorAll('.layout-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.layout === v));
+  loadSupportedChars();
+  toast(`Layout set to ${v}`, 'success');
+};
+
+/* Settings tab layout buttons */
+document.querySelectorAll('.layout-btn').forEach(b => b.onclick = async () => {
+  const v = b.dataset.layout;
+  await fetch('/api/layout', { method:'POST', body:`layout=${encodeURIComponent(v)}` });
+  layoutCompactEl.value = v;
+  layoutCurEl.textContent = v;
+  document.querySelectorAll('.layout-btn').forEach(x => x.classList.toggle('active', x === b));
+  loadSupportedChars();
+  toast(`Layout set to ${v}`, 'success');
+});
+
+/* ── Supported chars (for warning) ─────────────────────────────── */
 function loadSupportedChars() {
   fetch('/api/chars')
-    .then(r => r.json())
+    .then(r=>r.json())
     .then(j => { supportedChars = new Set(j.chars); checkUnsupportedChars(); })
-    .catch(() => {});
+    .catch(()=>{});
+}
+function checkUnsupportedChars() {
+  if (!supportedChars) return;
+  const text = document.getElementById('text').value;
+  let bad = 0; const seen = new Set();
+  for (const ch of text) {
+    if (ch==='\n'||ch==='\r'||ch==='\t') continue;
+    if (!supportedChars.has(ch) && !seen.has(ch)) { bad++; seen.add(ch); }
+  }
+  const warn = document.getElementById('charWarn');
+  if (bad > 0) {
+    warn.textContent = `⚠ ${bad} unsupported char${bad>1?'s':''}`;
+    warn.className = 'warn-chip';
+    warn.style.display = 'inline';
+  } else {
+    warn.style.display = 'none';
+  }
 }
 
-// ---- Paste stats / flow ----------------------------------------------------
+/* ── Speed segmented control ────────────────────────────────────── */
+const modeEl = document.getElementById('mode');
+function setSpeed(mode) {
+  modeEl.value = mode;
+  document.querySelectorAll('.speed-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.speed === mode));
+  updateStats();
+}
+document.querySelectorAll('.speed-btn').forEach(b => b.onclick = () => setSpeed(b.dataset.speed));
+
+/* ── Clipboard button ───────────────────────────────────────────── */
+document.getElementById('clipBtn').onclick = async () => {
+  try {
+    const t = await navigator.clipboard.readText();
+    if (t) {
+      document.getElementById('text').value = t;
+      updateStats();
+      toast('Clipboard loaded', 'success', 1800);
+    }
+  } catch(e) {
+    toast('Clipboard access denied — paste manually', 'warn');
+  }
+};
+
+/* ── Drag-drop on textarea ──────────────────────────────────────── */
+const textWrapEl = document.getElementById('textWrap');
+const textEl = document.getElementById('text');
+['dragenter','dragover'].forEach(ev => textWrapEl.addEventListener(ev, e => {
+  e.preventDefault(); textWrapEl.classList.add('drag-over');
+}));
+['dragleave','drop'].forEach(ev => textWrapEl.addEventListener(ev, e => {
+  e.preventDefault(); textWrapEl.classList.remove('drag-over');
+}));
+textWrapEl.addEventListener('drop', e => {
+  const file = e.dataTransfer?.files?.[0];
+  if (!file) return;
+  const ok = /\.(txt|md|env|log|sh|pem|csv|json|yaml|yml|conf|cfg|ini)$/i.test(file.name);
+  if (!ok) { toast(`Unsupported file type (${file.name})`, 'warn'); return; }
+  file.text().then(t => {
+    textEl.value = t;
+    updateStats();
+    toast(`Loaded ${file.name} (${(file.size/1024).toFixed(1)} kB)`, 'success');
+  });
+});
+
+/* ── Paste stats ────────────────────────────────────────────────── */
+const statsEl = document.getElementById('stats');
 function updateStats() {
   const n = textEl.value.length;
   const wpm = WPM[modeEl.value] || 120;
   let timeText;
   if (modeEl.value === 'max') {
-    timeText = 'as fast as the host accepts';
+    timeText = '@ Max speed';
   } else {
     const sec = Math.round(n * 60 / (wpm * 5));
-    timeText = sec < 60 ? sec + ' s' : Math.round(sec / 60) + ' min ' + (sec % 60) + ' s';
+    timeText = `~${sec<60 ? sec+' s' : Math.round(sec/60)+' min '+sec%60+' s'} @ ${modeEl.value==='fast'?'Fast':'Human'}`;
   }
-  statsEl.textContent = n + ' chars — estimated time: ' + timeText;
+  statsEl.textContent = n > 0 ? `${n.toLocaleString()} chars · ${timeText}` : '0 chars';
   checkUnsupportedChars();
 }
+textEl.oninput = updateStats;
 
+/* ── Paste UI locking ───────────────────────────────────────────── */
+const pasteBtnEl  = document.getElementById('pasteBtn');
+const cancelBtnEl = document.getElementById('cancelBtn');
 function setUiLocked(locked) {
-  pasteBtn.disabled = locked;
-  cancelBtn.disabled = !locked;
+  pasteBtnEl.disabled = locked;
+  cancelBtnEl.disabled = !locked;
   textEl.disabled = locked;
-  modeEl.disabled = locked;
-  if (locked) progressWrap.style.display = 'block';
+  document.querySelectorAll('.speed-btn').forEach(b => b.disabled = locked);
+  if (!locked) {
+    pasteBtnEl.querySelector('span').textContent = 'Type it  ⌘↵';
+    pasteBtnEl.style.setProperty('--paste-pct', '0%');
+    pasteBtnEl.classList.remove('typing');
+    document.getElementById('echoStrip').classList.remove('active');
+  }
 }
 
+/* ── updateStatus ───────────────────────────────────────────────── */
 function updateStatus(state, typed, total, pending, wpm, skipped) {
   typed   = typed   | 0;
   total   = total   | 0;
@@ -529,57 +1188,79 @@ function updateStatus(state, typed, total, pending, wpm, skipped) {
   wpm     = wpm     | 0;
   skipped = skipped | 0;
 
-  let statusText = state;
+  const label = pasteBtnEl.querySelector('span');
+
   if (state === 'typing') {
+    pasteBtnEl.classList.add('typing');
+    setOrbState('typing');
     if (total > 0) {
-      const pct = Math.min(100, Math.round(typed / total * 100));
-      const etaSec = wpm > 0 ? Math.round((total - typed) * 60 / (wpm * 5)) : 0;
-      const etaStr = etaSec < 60 ? etaSec + ' s left' : Math.round(etaSec / 60) + ' min left';
-      statusText = pct + '% · ' + etaStr + ' · ' + wpm + ' WPM';
-      progressBar.style.width = pct + '%';
-      progressBar.style.opacity = '1';
+      const pct = Math.min(100, Math.round(typed/total*100));
+      pasteBtnEl.style.setProperty('--paste-pct', pct+'%');
+      const eta = wpm > 0 ? Math.round((total-typed)*60/(wpm*5)) : 0;
+      const etaStr = eta < 60 ? `${eta} s` : `${Math.round(eta/60)} min`;
+      label.textContent = `${pct}% · ${etaStr} left · ${wpm} WPM`;
     } else {
-      statusText = 'typing ' + typed + ' chars · ' + wpm + ' WPM';
-      progressBar.style.width = '100%';
-      progressBar.style.opacity = '0.35';
+      pasteBtnEl.style.setProperty('--paste-pct', '40%');
+      label.textContent = `Typing ${typed.toLocaleString()} chars · ${wpm} WPM`;
+    }
+    // Live echo
+    if (pasteText && typed > 0) {
+      const start = Math.max(0, typed - 5);
+      const end   = Math.min(pasteText.length, typed + 35);
+      const before  = escHtml(pasteText.slice(start, typed));
+      const curChar = escHtml(pasteText[typed] || '');
+      const after   = escHtml(pasteText.slice(typed+1, end));
+      const echo = document.getElementById('echoStrip');
+      echo.innerHTML = `…${before}<span class="cursor-char">${curChar||'▌'}</span>${after}…`;
+      echo.classList.add('active');
     }
   } else if (state === 'done') {
-    statusText = 'Done — typed ' + typed + ' chars';
-  } else if (state === 'cancelled') {
-    statusText = 'Cancelled after ' + typed + ' chars';
-  } else if (state === 'error') {
-    statusText = 'Error after ' + typed + ' chars';
-  }
-  statusEl.textContent = statusText;
-
-  if (state === 'done' || state === 'cancelled' || state === 'error') {
-    if (skipped > 0) {
-      statusEl.textContent += ' — ' + skipped + ' character' + (skipped > 1 ? 's' : '') +
-        ' had no keymap entry and were approximated or skipped.';
-    }
+    label.textContent = `✓ Done — ${typed.toLocaleString()} chars typed`;
+    if (skipped > 0) toast(`${skipped} char${skipped>1?'s':''} had no keymap entry`, 'warn', 5000);
+    else toast('Paste complete', 'success', 2000);
+    addToHistory(pasteText);
+    setOrbState('');
     running = false;
     setUiLocked(false);
-    progressBar.style.width = '0%';
-    progressBar.style.opacity = '1';
+    // Reset progress bar compat element
+    document.getElementById('progressBar').style.width = '0%';
+    setTimeout(() => { if (!running) label.textContent = 'Type it  ⌘↵'; }, 2500);
+  } else if (state === 'cancelled') {
+    label.textContent = `Cancelled at ${typed.toLocaleString()} chars`;
+    setOrbState('');
+    running = false;
+    setUiLocked(false);
+    document.getElementById('progressBar').style.width = '0%';
+    setTimeout(() => { label.textContent = 'Type it  ⌘↵'; }, 2000);
+  } else if (state === 'error') {
+    label.textContent = `Error after ${typed.toLocaleString()} chars`;
+    setOrbState('error');
+    toast('Paste error — check connection', 'error');
+    running = false;
+    setUiLocked(false);
+    document.getElementById('progressBar').style.width = '0%';
+    setTimeout(() => { label.textContent = 'Type it  ⌘↵'; }, 2000);
   }
 }
 
-// ---- WebSocket -------------------------------------------------------------
+/* ── WebSocket ──────────────────────────────────────────────────── */
 function connectWs() {
   ws = new WebSocket('ws://' + location.host + '/ws');
   ws.onopen = () => {
-    statusEl.textContent = 'Connected — pair the dongle with your computer, then paste.';
+    wsRetryDelay = 2000;
+    setOrbState('');
     ws.send(JSON.stringify({t:'jiggle_get'}));
   };
   ws.onclose = () => {
-    statusEl.textContent = 'Disconnected. Reconnecting...';
-    setTimeout(connectWs, 2000);
+    setOrbState('no-host');
+    wsRetryDelay = Math.min(wsRetryDelay * 2, 30000);
+    setTimeout(connectWs, wsRetryDelay);
   };
   ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch(e) { return; }
     if (msg.t === 'status') {
-      updateStatus(msg.state, msg.typed, msg.total, msg.pending, msg.wpm, msg.skipped || 0);
+      updateStatus(msg.state, msg.typed, msg.total, msg.pending, msg.wpm, msg.skipped||0);
     } else if (msg.t === 'ack') {
       if (ackResolve) { ackResolve(); ackResolve = null; }
     } else if (msg.t === 'jiggle_state') {
@@ -595,298 +1276,577 @@ function waitAck() {
   return new Promise(resolve => { ackResolve = resolve; });
 }
 
+/* ── Paste flow ─────────────────────────────────────────────────── */
 async function doPaste() {
   const text = textEl.value;
-  if (!text) return;
+  if (!text || running) return;
+  pasteText = text;
   const mode = modeEl.value;
   const chunkSize = 512;
   running = true;
   setUiLocked(true);
-  ws.send(JSON.stringify({t:'start', total:text.length, mode:mode}));
+  ws.send(JSON.stringify({t:'start', total:text.length, mode}));
   for (let off = 0; off < text.length; off += chunkSize) {
     if (!running) break;
-    const chunk = text.slice(off, off + chunkSize);
-    ws.send(JSON.stringify({t:'chunk', text:chunk}));
+    ws.send(JSON.stringify({t:'chunk', text:text.slice(off, off+chunkSize)}));
     await waitAck();
   }
-  if (running) statusEl.textContent = 'Finishing...';
 }
 
-pasteBtn.onclick = () => doPaste().catch(e => { statusEl.textContent = 'Error: ' + e; setUiLocked(false); });
-cancelBtn.onclick = () => {
-  ws.send(JSON.stringify({t:'cancel'}));
+pasteBtnEl.onclick = () => {
+  if (!running) doPaste().catch(e => toast('Paste error: '+e, 'error'));
+};
+cancelBtnEl.onclick = () => {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({t:'cancel'}));
   running = false;
   if (ackResolve) { ackResolve(); ackResolve = null; }
 };
-textEl.oninput = updateStats;
-modeEl.onchange = updateStats;
 
-// ---- BLE config ------------------------------------------------------------
-fetch('/api/config')
-  .then(r => r.json())
-  .then(j => { curEl.textContent = j.name || '(default)'; nameEl.value = j.name || ''; })
-  .catch(() => {});
-
-document.getElementById('cfgform').onsubmit = async (e) => {
-  e.preventDefault();
-  const name = nameEl.value.trim();
-  if (!name || name.length > 31) return;
-  await fetch('/api/config', { method: 'POST', body: 'name=' + encodeURIComponent(name) });
-  await fetch('/api/reboot', { method: 'POST' });
-};
-
-// ---- Layout ----------------------------------------------------------------
-const layoutEl = document.getElementById('layout');
-const layoutCurEl = document.getElementById('layoutCur');
-
-fetch('/api/layout')
-  .then(r => r.json())
-  .then(j => { layoutEl.value = (j.layout || 'US').toUpperCase(); layoutCurEl.textContent = layoutEl.value; })
-  .catch(() => {});
-
-document.getElementById('layoutForm').onsubmit = async (e) => {
-  e.preventDefault();
-  const layout = layoutEl.value.toUpperCase();
-  await fetch('/api/layout', { method: 'POST', body: 'layout=' + encodeURIComponent(layout) });
-  layoutCurEl.textContent = layout;
-  loadSupportedChars();
-};
-
-// ---- Jiggler ---------------------------------------------------------------
-function applyJigglerState(j) {
-  jiggleEnabled.checked = j.enabled;
-  jigglePattern.value   = j.pattern || 'natural';
-  jiggleMeanInterval.value = Math.max(5, Math.round((j.interval_ms || 30000) / 1000));
-  jiggleDriftRadius.value  = j.ou_max_radius || 5;
-  jiggleJitter.value       = j.ou_jitter !== undefined ? j.ou_jitter : 50;
-  document.getElementById('jiggleDriftRadiusVal').textContent = jiggleDriftRadius.value;
-  document.getElementById('jiggleJitterVal').textContent      = jiggleJitter.value;
-  jiggleInterval.value  = Math.max(1, Math.round((j.interval_ms || 30000) / 1000));
-  jiggleDistance.value  = j.distance || 2;
-  document.getElementById('jiggleDistVal').textContent = j.distance || 2;
-  jiggleRandomize.checked = j.randomize || false;
-  const hasMouse = j.has_mouse;
-  jiggleStatus.textContent = hasMouse ? 'Mouse HID available.' : 'Mouse HID not available on this backend.';
-  jiggleEnabled.disabled = !hasMouse;
-  jiggleSaveBtn.disabled = !hasMouse;
-  updateJiggleMode();
-}
-
-async function loadJigglerConfig() {
-  try { applyJigglerState(await fetch('/api/jiggler').then(r => r.json())); }
-  catch(e) { jiggleStatus.textContent = 'Failed to load jiggler config.'; }
-}
-
-jiggleSaveBtn.onclick = async () => {
-  const natural = jigglePattern.value === 'natural';
-  const params = new URLSearchParams();
-  params.append('enabled', jiggleEnabled.checked ? '1' : '0');
-  params.append('pattern', jigglePattern.value);
-  if (natural) {
-    params.append('interval_ms',    String(Math.max(5,  parseInt(jiggleMeanInterval.value,10)||30) * 1000));
-    params.append('ou_max_radius',  String(Math.max(1,   Math.min(20,  parseInt(jiggleDriftRadius.value,10)||5))));
-    params.append('ou_jitter',      String(Math.max(0,   Math.min(100, parseInt(jiggleJitter.value,10)||50))));
-  } else {
-    params.append('interval_ms', String(Math.max(1, parseInt(jiggleInterval.value,10)||30) * 1000));
-    params.append('distance',    String(Math.max(1, Math.min(50, parseInt(jiggleDistance.value,10)||2))));
-    params.append('randomize',   jiggleRandomize.checked ? '1' : '0');
-  }
-  try {
-    await fetch('/api/jiggler', { method: 'POST', body: params });
-    jiggleStatus.textContent = 'Saved.';
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({t:'jiggle_get'}));
-  } catch(e) { jiggleStatus.textContent = 'Save failed: ' + e; }
-};
-
-document.getElementById('jiggleDistance').oninput    = (e) => { document.getElementById('jiggleDistVal').textContent       = e.target.value; };
-document.getElementById('jiggleDriftRadius').oninput = (e) => { document.getElementById('jiggleDriftRadiusVal').textContent = e.target.value; };
-document.getElementById('jiggleJitter').oninput      = (e) => { document.getElementById('jiggleJitterVal').textContent      = e.target.value; };
-
-// ---- Device info -----------------------------------------------------------
-function fmtUptime(ms) {
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
-  return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
-}
-async function loadDeviceInfo() {
-  try {
-    const j = await fetch('/api/info').then(r => r.json());
-    const heap = Math.round(j.free_heap/1024), minH = Math.round(j.min_free_heap/1024);
-    const bar = `${j.backend.toUpperCase()} · v${j.firmware_version} · up ${fmtUptime(j.uptime_ms)} · heap ${heap} kB (min ${minH} kB)`;
-    document.getElementById('deviceInfoBar').textContent  = bar;
-    document.getElementById('deviceInfoFull').textContent = bar;
-  } catch(e) { document.getElementById('deviceInfoFull').textContent = 'Device info unavailable.'; }
-}
-loadDeviceInfo();
-setInterval(loadDeviceInfo, 15000);
-
-// ---- UI file upload (LittleFS) ---------------------------------------------
-document.getElementById('uiUploadForm').onsubmit = async (e) => {
-  e.preventDefault();
-  const file = document.getElementById('uiFile').files[0];
-  const statusEl2 = document.getElementById('uiUploadStatus');
-  if (!file) { statusEl2.textContent = 'Select an index.html file first.'; return; }
-  document.getElementById('uiUploadBtn').disabled = true;
-  statusEl2.textContent = 'Uploading...';
-  const fd = new FormData();
-  fd.append('file', file, 'index.html');
-  try {
-    const r = await fetch('/api/fs/upload', { method: 'POST', body: fd });
-    const j = await r.json();
-    if (j.ok) {
-      statusEl2.textContent = 'Uploaded! Reloading...';
-      setTimeout(() => location.reload(), 1200);
-    } else {
-      statusEl2.textContent = 'Error: ' + (j.error || 'unknown');
+/* ── Keyboard shortcuts ─────────────────────────────────────────── */
+document.addEventListener('keydown', e => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key === 'Enter') {
+    e.preventDefault();
+    const activeTab = document.querySelector('.tab-panel.active')?.id;
+    if (activeTab === 'tab-paste' && !running) {
+      doPaste().catch(err => toast('Paste error: '+err, 'error'));
+    } else if (activeTab === 'tab-macros') {
+      document.getElementById('macroRunBtn').click();
     }
+  }
+  if (e.key === 'Escape' && running) {
+    cancelBtnEl.click();
+  }
+});
+
+/* ── Paste history ──────────────────────────────────────────────── */
+function addToHistory(text) {
+  if (!text || text.length < 3) return;
+  let hist = [];
+  try { hist = JSON.parse(localStorage.getItem('pd_history')||'[]'); } catch(e){}
+  hist = hist.filter(h => h.text !== text);
+  hist.unshift({ text, chars: text.length, ts: Date.now() });
+  if (hist.length > 5) hist.length = 5;
+  localStorage.setItem('pd_history', JSON.stringify(hist));
+  renderHistory();
+}
+function renderHistory() {
+  let hist = [];
+  try { hist = JSON.parse(localStorage.getItem('pd_history')||'[]'); } catch(e){}
+  const wrap = document.getElementById('histChips');
+  if (!hist.length) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = hist.map((h, i) => {
+    const preview = h.text.slice(0,28).replace(/\n/g,' ') + (h.text.length > 28 ? '…' : '');
+    return `<div class="hist-chip" onclick="restoreHistory(${i})">
+      <span class="hist-text">${escHtml(preview)}</span>
+      <span style="color:var(--muted);font-size:.72rem;">${(h.chars/1000).toFixed(1)}k</span>
+      <button class="hist-del" onclick="event.stopPropagation();deleteHistory(${i})" title="Remove">×</button>
+    </div>`;
+  }).join('');
+}
+function restoreHistory(i) {
+  let hist = [];
+  try { hist = JSON.parse(localStorage.getItem('pd_history')||'[]'); } catch(e){}
+  if (hist[i]) { textEl.value = hist[i].text; updateStats(); switchTab('paste'); }
+}
+function deleteHistory(i) {
+  let hist = [];
+  try { hist = JSON.parse(localStorage.getItem('pd_history')||'[]'); } catch(e){}
+  hist.splice(i, 1);
+  localStorage.setItem('pd_history', JSON.stringify(hist));
+  renderHistory();
+}
+renderHistory();
+
+/* ── escHtml ────────────────────────────────────────────────────── */
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Macro editor ───────────────────────────────────────────────── */
+const macroScriptEl = document.getElementById('macroScript');
+const macroLineNums = document.getElementById('macroLineNums');
+
+function updateLineNumbers() {
+  const lines = macroScriptEl.value.split('\n').length;
+  macroLineNums.textContent = Array.from({length:lines},(_,i)=>i+1).join('\n');
+  macroLineNums.style.height = macroScriptEl.style.height;
+  estimateMacroDuration();
+}
+macroScriptEl.addEventListener('input', updateLineNumbers);
+macroScriptEl.addEventListener('scroll', () => {
+  macroLineNums.scrollTop = macroScriptEl.scrollTop;
+});
+
+function estimateMacroDuration() {
+  const lines = macroScriptEl.value.split('\n');
+  let ms = 0;
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.startsWith('DELAY ')) ms += parseInt(t.slice(6))||0;
+    else if (t.startsWith('STRING ')) ms += (t.length - 7) * 10;
+    else if (t) ms += 50;
+  }
+  const el = document.getElementById('macroDuration');
+  if (ms === 0) { el.textContent = ''; return; }
+  const s = (ms/1000).toFixed(1);
+  el.textContent = `Estimated ~${s} s`;
+}
+updateLineNumbers();
+
+const macroRunBtn    = document.getElementById('macroRunBtn');
+const macroCancelBtn = document.getElementById('macroCancelBtn');
+const macroStatusEl  = document.getElementById('macroStatus');
+
+macroRunBtn.onclick = async () => {
+  const script = macroScriptEl.value.trim();
+  if (!script) { toast('Enter a script first', 'warn'); return; }
+  macroRunBtn.disabled = true;
+  macroCancelBtn.disabled = false;
+  macroStatusEl.textContent = 'Running…';
+  macroStatusEl.style.color = 'var(--accent)';
+  try {
+    const r = await fetch('/api/macro/run', {
+      method:'POST', body: new URLSearchParams({script})
+    });
+    const j = await r.json();
+    if (!j.ok) { toast('Macro error: '+(j.error||'?'), 'error'); macroStatusEl.textContent = ''; }
   } catch(e) {
-    statusEl2.textContent = 'Upload failed: ' + e;
+    toast('Macro request failed', 'error');
+    macroStatusEl.textContent = '';
   }
-  document.getElementById('uiUploadBtn').disabled = false;
+  setTimeout(() => {
+    macroRunBtn.disabled = false;
+    macroCancelBtn.disabled = true;
+    if (macroStatusEl.textContent === 'Running…') {
+      macroStatusEl.textContent = 'Sent — use Cancel if still running';
+      macroStatusEl.style.color = 'var(--muted)';
+    }
+  }, 5000);
+};
+macroCancelBtn.onclick = async () => {
+  try { await fetch('/api/macro/cancel',{method:'POST'}); } catch(_){}
+  toast('Macro cancelled', 'info', 1800);
+  macroRunBtn.disabled = false; macroCancelBtn.disabled = true;
+  macroStatusEl.textContent = '';
 };
 
-// ---- OTA upload ------------------------------------------------------------
-const otaFileEl   = document.getElementById('otaFile');
-const otaBtnEl    = document.getElementById('otaBtn');
-const otaProgressWrap = document.getElementById('otaProgressWrap');
-const otaBarEl    = document.getElementById('otaBar');
-const otaStatusEl = document.getElementById('otaStatus');
+/* ── Snippets ───────────────────────────────────────────────────── */
+const snippetListEl  = document.getElementById('snippetList');
+const snippetSearchEl = document.getElementById('snippetSearch');
+let allSnippets = [];
 
-document.getElementById('otaForm').onsubmit = (e) => {
-  e.preventDefault();
-  const file = otaFileEl.files[0];
-  if (!file) { otaStatusEl.textContent = 'Select a firmware .bin file first.'; return; }
-  const fd = new FormData();
-  fd.append('file', file, 'firmware.bin');
-  const xhr = new XMLHttpRequest();
-  otaBtnEl.disabled = true;
-  otaProgressWrap.style.display = 'block';
-  otaBarEl.style.width = '0%';
-  otaStatusEl.textContent = 'Uploading...';
-  xhr.upload.onprogress = (ev) => {
-    if (!ev.lengthComputable) return;
-    const pct = Math.round(ev.loaded / ev.total * 100);
-    otaBarEl.style.width = pct + '%';
-    otaStatusEl.textContent = `Uploading ${pct}% (${Math.round(ev.loaded/1024)} / ${Math.round(ev.total/1024)} kB)`;
-  };
-  function reloadCountdown(sec) {
-    const tick = () => {
-      otaStatusEl.textContent = `Upload complete — rebooting. Page reloads in ${sec} s...`;
-      if (sec-- > 0) setTimeout(tick, 1000); else location.reload();
-    };
-    tick();
+async function loadSnippets() {
+  try {
+    allSnippets = await fetch('/api/snippets').then(r=>r.json());
+    renderSnippets();
+  } catch(e) { snippetListEl.innerHTML = '<p style="color:var(--muted)">Failed to load</p>'; }
+}
+function renderSnippets() {
+  const q = snippetSearchEl.value.toLowerCase();
+  const filtered = allSnippets.filter(s =>
+    !q || s.title.toLowerCase().includes(q) || (s.preview||'').toLowerCase().includes(q));
+  if (!filtered.length) {
+    snippetListEl.innerHTML = `<p style="color:var(--muted);font-size:.85rem;">${q?'No matches':'No snippets saved. Use + New to save text.'}</p>`;
+    return;
   }
-  xhr.onload = () => {
-    otaBtnEl.disabled = false;
-    if (xhr.status === 200) { otaBarEl.style.width = '100%'; reloadCountdown(12); }
-    else { otaStatusEl.textContent = `Upload failed (HTTP ${xhr.status}): ${xhr.responseText}`; }
-  };
-  xhr.onerror = () => {
-    otaBtnEl.disabled = false;
-    if (parseFloat(otaBarEl.style.width) >= 99) reloadCountdown(15);
-    else otaStatusEl.textContent = 'Connection lost — check serial to see if flash succeeded.';
-  };
-  xhr.open('POST', '/api/update');
-  xhr.send(fd);
+  snippetListEl.innerHTML = filtered.map(s => `
+    <div class="snippet-card" data-id="${s.id}">
+      <div class="snippet-header">
+        <span class="snippet-title">${escHtml(s.title)}</span>
+        <span class="snippet-chars">${s.chars.toLocaleString()} chars</span>
+      </div>
+      ${s.preview?`<div class="snippet-preview">${escHtml(s.preview)}</div>`:''}
+      <div class="snippet-actions">
+        <button class="btn btn-sm btn-primary" onclick="typeSnippet(${s.id},this)">▶ Type</button>
+        <button class="btn btn-sm" onclick="editSnippet(${s.id})">✏ Edit</button>
+        <button class="btn btn-sm btn-ghost btn-danger" onclick="deleteSnippet(${s.id})">🗑</button>
+      </div>
+    </div>`).join('');
+}
+snippetSearchEl.oninput = renderSnippets;
+
+async function typeSnippet(id, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await fetch('/api/snippets/type', {method:'POST', body:new URLSearchParams({id})});
+    btn.textContent = '✓ Sent';
+    setTimeout(()=>{ btn.textContent=orig; btn.disabled=false; }, 3000);
+  } catch(e) { btn.textContent=orig; btn.disabled=false; toast('Failed to send','error'); }
+}
+async function deleteSnippet(id) {
+  if (!confirm('Delete this snippet?')) return;
+  await fetch(`/api/snippets?id=${id}`,{method:'DELETE'});
+  toast('Snippet deleted','info',1800);
+  loadSnippets();
+}
+let _editId = -1;
+const editArea = document.getElementById('snippetEditArea');
+async function editSnippet(id) {
+  try {
+    const s = await fetch(`/api/snippets?id=${id}`).then(r=>r.json());
+    document.getElementById('editTitle').value = s.title;
+    document.getElementById('editText').value  = s.text;
+    _editId = id;
+    editArea.classList.add('active');
+    document.getElementById('editText').focus();
+    editArea.scrollIntoView({behavior:'smooth',block:'nearest'});
+  } catch(e) { toast('Could not load snippet','error'); }
+}
+document.getElementById('saveEditBtn').onclick = async () => {
+  const title = document.getElementById('editTitle').value.trim();
+  const text  = document.getElementById('editText').value;
+  if (!title) return;
+  await fetch('/api/snippets',{method:'POST',body:new URLSearchParams({id:_editId,title,text})});
+  editArea.classList.remove('active'); _editId=-1;
+  toast('Snippet saved','success',1800);
+  loadSnippets();
+};
+document.getElementById('cancelEditBtn').onclick = () => {
+  editArea.classList.remove('active'); _editId=-1;
+};
+document.getElementById('saveSnippetBtn').onclick = async () => {
+  const text = textEl.value.trim();
+  if (!text) { toast('Paste some text first','warn'); return; }
+  const title = prompt('Snippet name:', 'Snippet '+Date.now());
+  if (!title) return;
+  const list = await fetch('/api/snippets').then(r=>r.json());
+  const used = new Set(list.map(s=>s.id));
+  let slot=-1;
+  for(let i=0;i<8;i++){if(!used.has(i)){slot=i;break;}}
+  if(slot<0){toast('All 8 slots full — delete one first','warn');return;}
+  await fetch('/api/snippets',{method:'POST',body:new URLSearchParams({id:slot,title,text})});
+  toast('Snippet saved','success',1800);
+  loadSnippets();
 };
 
-// ---- Reboot ----------------------------------------------------------------
-document.getElementById('rebootBtn').onclick = async () => {
-  try { await fetch('/api/reboot', { method: 'POST' }); } catch(_) {}
-  let t = 8;
-  const tick = () => {
-    document.getElementById('rebootStatus').textContent = `Rebooting… page reloads in ${t} s`;
-    if (t-- > 0) setTimeout(tick, 1000); else location.reload();
-  };
-  tick();
+/* ── Human simulation ───────────────────────────────────────────── */
+const simEnabledEl   = document.getElementById('simEnabled');
+const simPauseEl     = document.getElementById('simPause');
+const simWordsEl     = document.getElementById('simWords');
+const simCharDelayEl = document.getElementById('simCharDelay');
+
+function updateSimLabel() {
+  const ms = parseInt(simCharDelayEl.value,10)||130;
+  document.getElementById('simCharDelayVal').textContent = ms;
+  document.getElementById('simCharDelayWpm').textContent = Math.round(12000/ms);
+}
+simCharDelayEl.oninput = updateSimLabel;
+
+async function loadSimConfig() {
+  try {
+    const j = await fetch('/api/sim').then(r=>r.json());
+    simEnabledEl.checked        = j.enabled;
+    simPauseEl.value            = Math.round(j.pause_ms/1000);
+    simWordsEl.value            = j.words_per_burst;
+    simCharDelayEl.value        = j.char_delay_ms||130;
+    updateSimLabel();
+    const s = document.getElementById('simStatus');
+    if (j.enabled) { s.textContent='Active — typing and erasing random words'; s.style.display='block'; }
+    else { s.style.display='none'; }
+  } catch(e){}
+}
+document.getElementById('simSaveBtn').onclick = async () => {
+  await fetch('/api/sim',{method:'POST',body:new URLSearchParams({
+    enabled:        simEnabledEl.checked?'1':'0',
+    pause_ms:       String(Math.max(5,parseInt(simPauseEl.value,10)||18)*1000),
+    words_per_burst:String(Math.max(2,Math.min(20,parseInt(simWordsEl.value,10)||8))),
+    char_delay_ms:  String(Math.max(40,Math.min(300,parseInt(simCharDelayEl.value,10)||130))),
+  })});
+  toast('Simulation settings saved','success',1800);
+  loadSimConfig();
+  // update orb
+  if (simEnabledEl.checked) setOrbState('sim');
 };
 
-// ---- HID Identity ----------------------------------------------------------
-const HID_PRESETS = {
-  generic_kb:  { vid: '303A', pid: '1001', mfr: 'Espressif',   prod: 'USB HID Keyboard',              hint: 'Default Espressif identity. Safe and neutral.' },
-  k380:        { vid: '046D', pid: 'B342', mfr: 'Logitech',    prod: 'K380 Multi-Device Keyboard',     hint: 'Logitech K380 — common wireless keyboard, widely trusted.' },
-  mx_keys:     { vid: '046D', pid: 'B35B', mfr: 'Logitech',    prod: 'MX Keys',                        hint: 'Logitech MX Keys — popular office keyboard.' },
-  magic_kb:    { vid: '05AC', pid: '0267', mfr: 'Apple Inc.',  prod: 'Magic Keyboard',                 hint: 'Apple Magic Keyboard (USB). Appears as Apple hardware to the host.' },
-  dell_kb216:  { vid: '413C', pid: '2113', mfr: 'Dell Inc.',   prod: 'Dell USB Keyboard',              hint: 'Dell KB216 — ubiquitous office keyboard.' },
-  mx_master:   { vid: '046D', pid: 'B023', mfr: 'Logitech',    prod: 'MX Master 3',                    hint: 'Logitech MX Master 3 mouse. Best for jiggler use — host expects only mouse input.' },
-  magic_mouse: { vid: '05AC', pid: '0269', mfr: 'Apple Inc.',  prod: 'Magic Mouse 2',                  hint: 'Apple Magic Mouse 2. Mouse-forward identity.' },
-  g502:        { vid: '046D', pid: 'C08B', mfr: 'Logitech',    prod: 'G502 HERO Gaming Mouse',         hint: 'Logitech G502 — gaming mouse, no keyboard expected by host.' },
-  custom:      { vid: null,   pid: null,   mfr: null,           prod: null,                             hint: 'Enter your own VID/PID and strings.' },
+/* ── Jiggler ────────────────────────────────────────────────────── */
+const jiggleEnabledEl  = document.getElementById('jiggleEnabled');
+const jigglePatternEl  = document.getElementById('jigglePattern');
+const jiggleSaveBtnEl  = document.getElementById('jiggleSaveBtn');
+
+function updateJiggleMode() {
+  const nat = jigglePatternEl.value === 'natural';
+  document.getElementById('naturalControls').style.display  = nat?'':'none';
+  document.getElementById('geometricControls').style.display = nat?'none':'';
+}
+jigglePatternEl.onchange = updateJiggleMode;
+
+function applyJigglerState(j) {
+  jiggleEnabledEl.checked      = j.enabled;
+  jigglePatternEl.value        = j.pattern||'natural';
+  document.getElementById('jiggleMeanInterval').value = Math.max(5,Math.round((j.interval_ms||30000)/1000));
+  document.getElementById('jiggleDriftRadius').value  = j.ou_max_radius||5;
+  document.getElementById('jiggleJitter').value       = j.ou_jitter!==undefined?j.ou_jitter:50;
+  document.getElementById('jiggleDriftRadiusVal').textContent = j.ou_max_radius||5;
+  document.getElementById('jiggleJitterVal').textContent      = j.ou_jitter!==undefined?j.ou_jitter:50;
+  document.getElementById('jiggleInterval').value  = Math.max(1,Math.round((j.interval_ms||30000)/1000));
+  document.getElementById('jiggleDistance').value  = j.distance||2;
+  document.getElementById('jiggleDistVal').textContent = j.distance||2;
+  document.getElementById('jiggleRandomize').checked  = j.randomize||false;
+  const hasMouse = j.has_mouse;
+  const statusEl = document.getElementById('jiggleStatus');
+  statusEl.textContent = hasMouse ? (j.enabled?'Active':'Available — toggle to enable') : 'Mouse HID not available on this backend';
+  jiggleEnabledEl.disabled = !hasMouse;
+  jiggleSaveBtnEl.disabled = !hasMouse;
+  updateJiggleMode();
+  if (hasMouse && j.enabled) setOrbState('jiggling');
+}
+async function loadJigglerConfig() {
+  try { applyJigglerState(await fetch('/api/jiggler').then(r=>r.json())); }
+  catch(e){}
+}
+
+// Slider live labels
+document.getElementById('jiggleDistance').oninput    = e => document.getElementById('jiggleDistVal').textContent       = e.target.value;
+document.getElementById('jiggleDriftRadius').oninput = e => document.getElementById('jiggleDriftRadiusVal').textContent = e.target.value;
+document.getElementById('jiggleJitter').oninput      = e => document.getElementById('jiggleJitterVal').textContent      = e.target.value;
+
+jiggleSaveBtnEl.onclick = async () => {
+  const nat = jigglePatternEl.value === 'natural';
+  const params = new URLSearchParams();
+  params.append('enabled', jiggleEnabledEl.checked?'1':'0');
+  params.append('pattern', jigglePatternEl.value);
+  if (nat) {
+    params.append('interval_ms',   String(Math.max(5,parseInt(document.getElementById('jiggleMeanInterval').value,10)||30)*1000));
+    params.append('ou_max_radius', String(Math.max(1,Math.min(20,parseInt(document.getElementById('jiggleDriftRadius').value,10)||5))));
+    params.append('ou_jitter',     String(Math.max(0,Math.min(100,parseInt(document.getElementById('jiggleJitter').value,10)||50))));
+  } else {
+    params.append('interval_ms', String(Math.max(1,parseInt(document.getElementById('jiggleInterval').value,10)||30)*1000));
+    params.append('distance',    String(Math.max(1,Math.min(50,parseInt(document.getElementById('jiggleDistance').value,10)||2))));
+    params.append('randomize',   document.getElementById('jiggleRandomize').checked?'1':'0');
+  }
+  await fetch('/api/jiggler',{method:'POST',body:params});
+  toast('Jiggler saved','success',1800);
+  if (ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({t:'jiggle_get'}));
 };
 
+/* ── HID Identity ───────────────────────────────────────────────── */
 const hidVidEl    = document.getElementById('hidVid');
 const hidPidEl    = document.getElementById('hidPid');
-const hidMfrEl    = document.getElementById('hidMfr');
-const hidProdEl   = document.getElementById('hidProd');
 const hidPresetEl = document.getElementById('hidPreset');
+const hexRe = /^[0-9A-Fa-f]{0,4}$/;
+
+function validateHex(el) {
+  const ok = hexRe.test(el.value) && el.value.length === 4;
+  el.classList.toggle('error', !ok && el.value.length > 0);
+  return ok || el.value.length === 0;
+}
+[hidVidEl, hidPidEl].forEach(el => el.addEventListener('input', () => {
+  validateHex(el);
+  const ok = validateHex(hidVidEl) && validateHex(hidPidEl);
+  document.getElementById('hidSaveBtn').disabled = !ok;
+}));
 
 function applyHidPreset(key) {
   const p = HID_PRESETS[key];
   if (!p) return;
-  document.getElementById('hidPresetHint').textContent = p.hint || '';
-  if (p.vid !== null) {
-    hidVidEl.value  = p.vid;
-    hidPidEl.value  = p.pid;
-    hidMfrEl.value  = p.mfr;
-    hidProdEl.value = p.prod;
+  document.getElementById('hidPresetHint').textContent = p.hint||'';
+  if (p.vid) {
+    hidVidEl.value = p.vid;
+    hidPidEl.value = p.pid;
+    document.getElementById('hidMfr').value  = p.mfr;
+    document.getElementById('hidProd').value = p.prod;
+    [hidVidEl,hidPidEl].forEach(el => el.classList.remove('error'));
+    document.getElementById('hidSaveBtn').disabled = false;
   }
 }
 hidPresetEl.onchange = () => applyHidPreset(hidPresetEl.value);
 
 async function loadHidIdentity() {
   try {
-    const j = await fetch('/api/hid_identity').then(r => r.json());
+    const j = await fetch('/api/hid_identity').then(r=>r.json());
     hidVidEl.value  = j.vid.toString(16).toUpperCase().padStart(4,'0');
     hidPidEl.value  = j.pid.toString(16).toUpperCase().padStart(4,'0');
-    hidMfrEl.value  = j.manufacturer;
-    hidProdEl.value = j.product;
-    // Try to match a preset
-    const curr = `${hidVidEl.value}|${hidPidEl.value}|${hidMfrEl.value}|${hidProdEl.value}`;
+    document.getElementById('hidMfr').value  = j.manufacturer;
+    document.getElementById('hidProd').value = j.product;
+    const curr = `${hidVidEl.value}|${hidPidEl.value}|${document.getElementById('hidMfr').value}|${document.getElementById('hidProd').value}`;
     let matched = 'custom';
-    for (const [k, v] of Object.entries(HID_PRESETS)) {
-      if (v.vid && `${v.vid}|${v.pid}|${v.mfr}|${v.prod}` === curr) { matched = k; break; }
+    for (const [k,v] of Object.entries(HID_PRESETS)) {
+      if (v.vid && `${v.vid}|${v.pid}|${v.mfr}|${v.prod}` === curr) { matched=k; break; }
     }
     hidPresetEl.value = matched;
     applyHidPreset(matched);
-  } catch(e) {}
+  } catch(e){}
 }
 
 document.getElementById('hidSaveBtn').onclick = async () => {
   const params = new URLSearchParams({
-    vid: hidVidEl.value.trim() || '303A',
-    pid: hidPidEl.value.trim() || '1001',
-    manufacturer: hidMfrEl.value.trim() || 'Espressif',
-    product: hidProdEl.value.trim() || 'USB HID Keyboard',
+    vid: hidVidEl.value.trim()||'303A',
+    pid: hidPidEl.value.trim()||'1001',
+    manufacturer: document.getElementById('hidMfr').value.trim()||'Espressif',
+    product: document.getElementById('hidProd').value.trim()||'USB HID Keyboard',
   });
   try {
-    await fetch('/api/hid_identity', { method: 'POST', body: params });
-    document.getElementById('hidStatus').textContent = 'Saved. Rebooting to apply new identity…';
-    await fetch('/api/reboot', { method: 'POST' }).catch(() => {});
-    setTimeout(() => location.reload(), 10000);
+    await fetch('/api/hid_identity',{method:'POST',body:params});
+    toast('Identity saved — rebooting…','success');
+    await fetch('/api/reboot',{method:'POST'}).catch(()=>{});
+    setTimeout(()=>location.reload(),11000);
+  } catch(e) { toast('Save failed','error'); }
+};
+
+/* ── BLE name ───────────────────────────────────────────────────── */
+fetch('/api/config').then(r=>r.json()).then(j=>{
+  document.getElementById('cur').textContent = j.name||(j.name===''?'(default)':'…');
+  document.getElementById('name').value = j.name||'';
+}).catch(()=>{});
+document.getElementById('cfgform').onsubmit = async e => {
+  e.preventDefault();
+  const name = document.getElementById('name').value.trim();
+  if(!name||name.length>31) return;
+  await fetch('/api/config',{method:'POST',body:`name=${encodeURIComponent(name)}`});
+  await fetch('/api/reboot',{method:'POST'}).catch(()=>{});
+  toast('Saving & rebooting…','success');
+};
+
+/* ── Reboot ─────────────────────────────────────────────────────── */
+document.getElementById('rebootBtn').onclick = async () => {
+  try { await fetch('/api/reboot',{method:'POST'}); } catch(_){}
+  let t = 8;
+  const el = document.getElementById('rebootStatus');
+  const tick = () => { el.textContent=`Rebooting… ${t} s`; if(t-- >0) setTimeout(tick,1000); else location.reload(); };
+  tick();
+};
+
+/* ── Device info ────────────────────────────────────────────────── */
+function fmtUptime(ms) {
+  const s=Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+  return h?`${h}h ${m}m`:m?`${m}m ${sec}s`:`${sec}s`;
+}
+async function loadDeviceInfo() {
+  try {
+    const j = await fetch('/api/info').then(r=>r.json());
+    const heap=Math.round(j.free_heap/1024), minH=Math.round(j.min_free_heap/1024);
+    const bar=`${j.backend.toUpperCase()} · v${j.firmware_version} · up ${fmtUptime(j.uptime_ms)} · heap ${heap} kB (min ${minH} kB)`;
+    document.getElementById('deviceInfoBar').textContent = bar;
+    document.getElementById('deviceInfoFull').textContent = bar;
+  } catch(e){
+    document.getElementById('deviceInfoBar').textContent = 'Connecting…';
+  }
+}
+loadDeviceInfo();
+setInterval(loadDeviceInfo, 15000);
+
+/* ── UI file upload (drop zone) ─────────────────────────────────── */
+const uiDropZone = document.getElementById('uiDropZone');
+const uiFileEl   = document.getElementById('uiFile');
+const uiUploadBtn = document.getElementById('uiUploadBtn');
+
+function setupDropZone(zone, fileInput, onFile) {
+  zone.onclick = () => fileInput.click();
+  ['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => {
+    e.preventDefault(); zone.classList.add('drag-over');
+  }));
+  ['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => {
+    e.preventDefault(); zone.classList.remove('drag-over');
+  }));
+  zone.addEventListener('drop', e => {
+    const f = e.dataTransfer?.files?.[0];
+    if (f) onFile(f);
+  });
+  fileInput.onchange = () => { if (fileInput.files[0]) onFile(fileInput.files[0]); };
+}
+
+let uiFile = null;
+setupDropZone(uiDropZone, uiFileEl, f => {
+  uiFile = f;
+  uiDropZone.querySelector('p').textContent = `Ready: ${f.name} (${(f.size/1024).toFixed(1)} kB)`;
+  uiUploadBtn.disabled = false;
+});
+uiUploadBtn.onclick = async () => {
+  if (!uiFile) return;
+  const statusEl2 = document.getElementById('uiUploadStatus');
+  uiUploadBtn.disabled = true;
+  statusEl2.textContent = 'Uploading…';
+  const fd = new FormData();
+  fd.append('file', uiFile, 'index.html');
+  try {
+    const r = await fetch('/api/fs/upload',{method:'POST',body:fd});
+    const j = await r.json();
+    if (j.ok) {
+      toast('UI updated — reloading…','success');
+      statusEl2.textContent = 'Done — reloading…';
+      setTimeout(()=>location.reload(), 1200);
+    } else {
+      toast('Upload failed: '+(j.error||'?'),'error');
+      statusEl2.textContent = 'Error: '+(j.error||'?');
+      uiUploadBtn.disabled = false;
+    }
   } catch(e) {
-    document.getElementById('hidStatus').textContent = 'Save failed: ' + e;
+    toast('Upload failed','error');
+    statusEl2.textContent = 'Failed';
+    uiUploadBtn.disabled = false;
   }
 };
 
-// ---- Status / USB section --------------------------------------------------
-fetch('/api/status')
-  .then(r => r.json())
-  .then(j => {
-    if (j.backend === 'usb') {
-      document.getElementById('bleSection').style.display = 'none';
-      document.getElementById('hidSection').style.display = '';
-      loadHidIdentity();
-    }
-  })
-  .catch(() => {});
+/* ── OTA firmware upload ────────────────────────────────────────── */
+const otaDropZone = document.getElementById('otaDropZone');
+const otaFileEl   = document.getElementById('otaFile');
+const otaBtnEl    = document.getElementById('otaBtn');
+let otaFile = null;
 
-// ---- Init ------------------------------------------------------------------
+setupDropZone(otaDropZone, otaFileEl, f => {
+  otaFile = f;
+  otaDropZone.querySelector('p').textContent = `Ready: ${f.name} (${(f.size/1024).toFixed(1)} kB)`;
+  otaBtnEl.disabled = false;
+});
+
+function reloadCountdown(sec) {
+  const tick = () => {
+    document.getElementById('otaStatus').textContent = `Upload complete — rebooting. Reload in ${sec} s…`;
+    if(sec-- > 0) setTimeout(tick,1000); else location.reload();
+  };
+  tick();
+}
+otaBtnEl.onclick = () => {
+  if (!otaFile) return;
+  const fd = new FormData();
+  fd.append('file', otaFile, 'firmware.bin');
+  const xhr = new XMLHttpRequest();
+  otaBtnEl.disabled = true;
+  document.getElementById('otaProgressWrap').style.display = 'block';
+  const otaBarEl = document.getElementById('otaBar');
+  const otaStatusEl = document.getElementById('otaStatus');
+  otaBarEl.style.width = '0%';
+  otaStatusEl.textContent = 'Uploading…';
+  xhr.upload.onprogress = ev => {
+    if (!ev.lengthComputable) return;
+    const pct = Math.round(ev.loaded/ev.total*100);
+    otaBarEl.style.width = pct+'%';
+    otaStatusEl.textContent = `${pct}% — ${Math.round(ev.loaded/1024)} / ${Math.round(ev.total/1024)} kB`;
+  };
+  xhr.onload = () => {
+    otaBtnEl.disabled = false;
+    if (xhr.status === 200) { otaBarEl.style.width='100%'; reloadCountdown(12); }
+    else { toast(`Upload failed (${xhr.status})`,'error'); otaStatusEl.textContent = `Error ${xhr.status}`; }
+  };
+  xhr.onerror = () => {
+    otaBtnEl.disabled = false;
+    if (parseFloat(otaBarEl.style.width) >= 99) reloadCountdown(15);
+    else { toast('Connection lost','error'); otaStatusEl.textContent = 'Connection lost'; }
+  };
+  xhr.open('POST','/api/update');
+  xhr.send(fd);
+};
+
+/* ── Status / backend detection ─────────────────────────────────── */
+fetch('/api/status').then(r=>r.json()).then(j => {
+  if (j.backend === 'usb') {
+    document.getElementById('bleSection').style.display = 'none';
+    document.getElementById('hidSection').style.display = '';
+  } else {
+    document.getElementById('hidSection').style.display = 'none';
+  }
+  if (!j.connected) setOrbState('no-host');
+}).catch(()=>{});
+
+/* ── Initialise ─────────────────────────────────────────────────── */
 loadJigglerConfig();
 loadSupportedChars();
 loadSnippets();
 loadSimConfig();
+loadHidIdentity();
 updateStats();
-// hidSection and bleSection are shown/hidden by the status fetch above
 </script>
 </body>
 </html>
