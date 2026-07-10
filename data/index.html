@@ -680,39 +680,115 @@ label {
 
   <!-- Macro editor -->
   <p class="section-title">Macro Script</p>
+  <div style="display:flex;gap:.5rem;margin-bottom:.5rem;align-items:center;">
+    <label for="macroTemplate" style="margin:0;white-space:nowrap;font-size:.8rem;">Load template:</label>
+    <select id="macroTemplate" style="flex:1;padding:.35rem .6rem;font-size:.8rem;border-radius:6px;">
+      <option value="">— select —</option>
+      <optgroup label="Windows">
+        <option value="win_run">Open Run dialog (Win+R)</option>
+        <option value="win_lock">Lock workstation</option>
+        <option value="win_screenshot">Screenshot to clipboard</option>
+        <option value="win_terminal">Open PowerShell</option>
+        <option value="win_taskman">Open Task Manager</option>
+      </optgroup>
+      <optgroup label="macOS">
+        <option value="mac_terminal">Open Terminal</option>
+        <option value="mac_spotlight">Open Spotlight</option>
+        <option value="mac_screenshot">Screenshot to clipboard</option>
+        <option value="mac_lock">Lock screen</option>
+      </optgroup>
+      <optgroup label="Universal">
+        <option value="u_alttab">Alt+Tab (switch window)</option>
+        <option value="u_close">Close window (Ctrl+W / Cmd+W)</option>
+        <option value="u_selectall">Select all + copy</option>
+        <option value="u_undo">Undo</option>
+        <option value="u_save">Save file</option>
+      </optgroup>
+    </select>
+  </div>
   <div id="macroEditorWrap">
     <div id="macroLineNums">1</div>
-    <textarea id="macroScript" rows="8" placeholder="STRING Hello world&#10;DELAY 200&#10;ENTER" spellcheck="false"></textarea>
+    <textarea id="macroScript" rows="10" placeholder="# Type a macro script here&#10;STRING Hello world&#10;DELAY 200&#10;ENTER" spellcheck="false"></textarea>
   </div>
-  <p id="macroDuration" aria-live="polite">Estimated duration: —</p>
+  <p id="macroDuration" aria-live="polite" style="font-size:.78rem;color:var(--muted);margin-bottom:.6rem;"></p>
   <div class="macro-actions">
     <button class="btn btn-primary" id="macroRunBtn">▶ Run &nbsp;⌘↵</button>
     <button class="btn" id="macroCancelBtn" disabled>✕ Cancel</button>
   </div>
-  <p id="macroStatus"></p>
+  <p id="macroStatus" style="font-size:.82rem;min-height:1.2em;"></p>
 
-  <!-- Syntax reference -->
-  <details id="macroRef">
-    <summary>Script syntax reference</summary>
+  <!-- Syntax reference — expanded -->
+  <details id="macroRef" style="margin-top:.5rem;">
+    <summary>Full syntax reference</summary>
+
+    <p style="font-size:.78rem;color:var(--muted);padding:.6rem .9rem .2rem;">One command per line. Lines starting with <code>#</code> or <code>REM</code> are comments.</p>
+
+    <p style="font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:.4rem .9rem .2rem;">Typing</p>
     <table class="ref-table">
-      <tr><td>STRING Hello world</td><td>Type text character by character</td></tr>
-      <tr><td>DELAY 500</td><td>Pause 500 ms</td></tr>
-      <tr><td>ENTER</td><td>Press Enter / Return</td></tr>
-      <tr><td>TAB</td><td>Tab key</td></tr>
-      <tr><td>ESC</td><td>Escape</td></tr>
-      <tr><td>BACKSPACE</td><td>Backspace</td></tr>
-      <tr><td>SPACE</td><td>Space bar</td></tr>
-      <tr><td>UP / DOWN / LEFT / RIGHT</td><td>Arrow keys</td></tr>
-      <tr><td>F1 … F12</td><td>Function keys</td></tr>
-      <tr><td>HOME / END</td><td>Home and End</td></tr>
-      <tr><td>PAGEUP / PAGEDOWN</td><td>Page Up / Down</td></tr>
-      <tr><td>DELETE / INSERT</td><td>Delete and Insert</td></tr>
-      <tr><td>MOD_KEY CTRL c</td><td>Ctrl+C (copy)</td></tr>
-      <tr><td>MOD_KEY CTRL v</td><td>Ctrl+V (paste)</td></tr>
-      <tr><td>MOD_KEY SHIFT ENTER</td><td>Shift+Enter</td></tr>
-      <tr><td>MOD_KEY GUI r</td><td>Win+R / Cmd+R</td></tr>
-      <tr><td>MOD_KEY CTRL ALT DEL</td><td>Three-finger salute</td></tr>
+      <tr><td>STRING Hello world</td><td>Type text literally, one char at a time</td></tr>
+      <tr><td>STRINGLN Hello</td><td>Type text then press Enter</td></tr>
+      <tr><td>DELAY 500</td><td>Pause for 500 milliseconds</td></tr>
+      <tr><td>DEFAULTDELAY 100</td><td>Add 100 ms after every command automatically</td></tr>
+      <tr><td>REPEAT 5</td><td>Repeat the previous command 5 times</td></tr>
     </table>
+
+    <p style="font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:.6rem .9rem .2rem;">Navigation &amp; editing keys</p>
+    <table class="ref-table">
+      <tr><td>ENTER</td><td>Enter / Return</td></tr>
+      <tr><td>TAB</td><td>Tab</td></tr>
+      <tr><td>ESC</td><td>Escape</td></tr>
+      <tr><td>SPACE</td><td>Space bar</td></tr>
+      <tr><td>BACKSPACE</td><td>Backspace</td></tr>
+      <tr><td>DELETE</td><td>Delete (forward)</td></tr>
+      <tr><td>INSERT</td><td>Insert</td></tr>
+      <tr><td>UP / DOWN / LEFT / RIGHT</td><td>Arrow keys</td></tr>
+      <tr><td>HOME / END</td><td>Line start / end</td></tr>
+      <tr><td>PAGEUP / PAGEDOWN</td><td>Page up / down</td></tr>
+    </table>
+
+    <p style="font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:.6rem .9rem .2rem;">System keys</p>
+    <table class="ref-table">
+      <tr><td>F1 … F12</td><td>Function keys</td></tr>
+      <tr><td>CAPSLOCK</td><td>Toggle Caps Lock</td></tr>
+      <tr><td>NUMLOCK</td><td>Toggle Num Lock</td></tr>
+      <tr><td>SCROLLLOCK</td><td>Toggle Scroll Lock</td></tr>
+      <tr><td>PRINTSCREEN</td><td>Print Screen / PrtSc</td></tr>
+      <tr><td>PAUSE</td><td>Pause / Break</td></tr>
+      <tr><td>MENU</td><td>Application / right-click menu key</td></tr>
+    </table>
+
+    <p style="font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:.6rem .9rem .2rem;">Modifier combos</p>
+    <p style="font-size:.76rem;color:var(--muted);padding:0 .9rem .3rem;">Modifiers: <code>CTRL</code> <code>SHIFT</code> <code>ALT</code> <code>GUI</code> (Win/Cmd). Chain up to three.</p>
+    <table class="ref-table">
+      <tr><td>MOD_KEY CTRL c</td><td>Ctrl+C — copy</td></tr>
+      <tr><td>MOD_KEY CTRL v</td><td>Ctrl+V — paste</td></tr>
+      <tr><td>MOD_KEY CTRL z</td><td>Ctrl+Z — undo</td></tr>
+      <tr><td>MOD_KEY GUI r</td><td>Win+R — Run dialog</td></tr>
+      <tr><td>MOD_KEY GUI l</td><td>Win+L — lock workstation</td></tr>
+      <tr><td>MOD_KEY ALT F4</td><td>Alt+F4 — close window</td></tr>
+      <tr><td>MOD_KEY ALT TAB</td><td>Alt+Tab — switch window</td></tr>
+      <tr><td>MOD_KEY SHIFT ENTER</td><td>Shift+Enter — new line without submit</td></tr>
+      <tr><td>MOD_KEY CTRL SHIFT ESC</td><td>Open Task Manager (Windows)</td></tr>
+      <tr><td>MOD_KEY CTRL ALT DEL</td><td>Three-finger salute</td></tr>
+      <tr><td>MOD_KEY GUI SPACE</td><td>Spotlight (macOS)</td></tr>
+      <tr><td>MOD_KEY CTRL SHIFT t</td><td>Reopen closed tab</td></tr>
+    </table>
+
+    <p style="font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:.6rem .9rem .2rem;">Mouse (in macros)</p>
+    <table class="ref-table">
+      <tr><td>MOUSE_MOVE 10 -5</td><td>Move cursor 10 px right, 5 px up (relative)</td></tr>
+      <tr><td>MOUSE_CLICK LEFT</td><td>Left click</td></tr>
+      <tr><td>MOUSE_CLICK RIGHT</td><td>Right click</td></tr>
+      <tr><td>MOUSE_CLICK MIDDLE</td><td>Middle click</td></tr>
+      <tr><td>MOUSE_DOUBLE LEFT</td><td>Double left click</td></tr>
+      <tr><td>MOUSE_SCROLL 3</td><td>Scroll down 3 lines (negative = up)</td></tr>
+    </table>
+
+    <p style="font-size:.72rem;color:var(--muted);padding:.6rem .9rem .8rem;border-top:1px solid var(--border);margin-top:.4rem;">
+      ⚠ Mouse commands require the jiggler's Mouse HID to be available on this backend.
+      STRINGLN, DEFAULTDELAY, REPEAT, CAPSLOCK, PRINTSCREEN, PAUSE, MENU and mouse commands
+      are planned — mark them as <em>coming soon</em> if the device returns an error.
+    </p>
   </details>
 
   <!-- Snippets -->
@@ -876,24 +952,25 @@ label {
   <div id="hidSection" style="display:none;">
     <p class="section-title">HID Identity</p>
     <div class="card">
-      <p class="hint" style="margin-bottom:.75rem;">Change how the dongle appears to the host OS. For personal use only. Requires reboot.</p>
+      <p class="hint" style="margin-bottom:.5rem;">One identity covers the whole device — both the keyboard <em>and</em> mouse interfaces share the same VID/PID and name. The host sees one USB device with two capabilities.</p>
+      <p class="hint" style="margin-bottom:.75rem;">Pick a <strong>keyboard preset</strong> when pasting is your main use. Pick a <strong>mouse-forward preset</strong> when using only the jiggler — the host expects mouse movement but will also see a keyboard interface attached (uncommon but harmless). Requires reboot to apply.</p>
       <div style="margin-bottom:.6rem;">
-        <label for="hidPreset">Preset</label>
+        <label for="hidPreset">Preset profile</label>
         <select id="hidPreset">
-          <optgroup label="Keyboards">
+          <optgroup label="Keyboard-forward (paste + jiggler)">
             <option value="generic_kb">Generic HID Keyboard (default)</option>
-            <option value="k380">Logitech K380</option>
+            <option value="k380">Logitech K380 Multi-Device Keyboard</option>
             <option value="mx_keys">Logitech MX Keys</option>
             <option value="magic_kb">Apple Magic Keyboard</option>
             <option value="dell_kb216">Dell KB216</option>
           </optgroup>
-          <optgroup label="Mice">
+          <optgroup label="Mouse-forward (jiggler-only use)">
             <option value="mx_master">Logitech MX Master 3</option>
             <option value="magic_mouse">Apple Magic Mouse 2</option>
             <option value="g502">Logitech G502 Gaming Mouse</option>
           </optgroup>
           <optgroup label="Other">
-            <option value="custom">Custom</option>
+            <option value="custom">Custom VID/PID</option>
           </optgroup>
         </select>
         <p class="hint" id="hidPresetHint" style="margin-top:.3rem;"></p>
@@ -985,15 +1062,15 @@ label {
 /* ── Constants ──────────────────────────────────────────────────── */
 const WPM = { max: 600, fast: 120, human: 70 };
 const HID_PRESETS = {
-  generic_kb:  { vid:'303A', pid:'1001', mfr:'Espressif',  prod:'USB HID Keyboard',           hint:'Default Espressif identity.' },
-  k380:        { vid:'046D', pid:'B342', mfr:'Logitech',   prod:'K380 Multi-Device Keyboard', hint:'Common wireless keyboard — widely trusted.' },
-  mx_keys:     { vid:'046D', pid:'B35B', mfr:'Logitech',   prod:'MX Keys',                   hint:'Popular office keyboard.' },
-  magic_kb:    { vid:'05AC', pid:'0267', mfr:'Apple Inc.', prod:'Magic Keyboard',             hint:'Apple Magic Keyboard (USB).' },
-  dell_kb216:  { vid:'413C', pid:'2113', mfr:'Dell Inc.',  prod:'Dell USB Keyboard',         hint:'Ubiquitous office keyboard.' },
-  mx_master:   { vid:'046D', pid:'B023', mfr:'Logitech',   prod:'MX Master 3',               hint:'Mouse-forward — best for jiggler use.' },
-  magic_mouse: { vid:'05AC', pid:'0269', mfr:'Apple Inc.', prod:'Magic Mouse 2',             hint:'Mouse identity.' },
-  g502:        { vid:'046D', pid:'C08B', mfr:'Logitech',   prod:'G502 HERO Gaming Mouse',    hint:'Gaming mouse identity.' },
-  custom:      { vid:null,   pid:null,   mfr:null,          prod:null,                         hint:'Enter custom values below.' },
+  generic_kb:  { vid:'303A', pid:'1001', mfr:'Espressif',  prod:'USB HID Keyboard',           hint:'Safe default. Host sees a generic Espressif keyboard + mouse device.' },
+  k380:        { vid:'046D', pid:'B342', mfr:'Logitech',   prod:'K380 Multi-Device Keyboard', hint:'Keyboard-forward. K380 is common in offices — unremarkable. Good for paste use.' },
+  mx_keys:     { vid:'046D', pid:'B35B', mfr:'Logitech',   prod:'MX Keys',                   hint:'Keyboard-forward. Popular office keyboard with integrated trackpad on some variants.' },
+  magic_kb:    { vid:'05AC', pid:'0267', mfr:'Apple Inc.', prod:'Magic Keyboard',             hint:'Keyboard-forward. Host expects keyboard input. Good for Apple-heavy environments.' },
+  dell_kb216:  { vid:'413C', pid:'2113', mfr:'Dell Inc.',  prod:'Dell USB Keyboard',         hint:'Keyboard-forward. The most generic office keyboard imaginable — totally unremarkable.' },
+  mx_master:   { vid:'046D', pid:'B023', mfr:'Logitech',   prod:'MX Master 3',               hint:'Mouse-forward. Host expects cursor movement, not typing. Best when only using the jiggler.' },
+  magic_mouse: { vid:'05AC', pid:'0269', mfr:'Apple Inc.', prod:'Magic Mouse 2',             hint:'Mouse-forward. Suitable for jiggler-only use in Apple environments.' },
+  g502:        { vid:'046D', pid:'C08B', mfr:'Logitech',   prod:'G502 HERO Gaming Mouse',    hint:'Mouse-forward. Gaming mouse — host expects only mouse HID traffic.' },
+  custom:      { vid:null,   pid:null,   mfr:null,          prod:null,                         hint:'Enter any VID/PID (4 hex digits each). For personal use only.' },
 };
 
 /* ── State ──────────────────────────────────────────────────────── */
@@ -1364,6 +1441,33 @@ function escHtml(s) {
 }
 
 /* ── Macro editor ───────────────────────────────────────────────── */
+/* ── Macro templates ────────────────────────────────────────────── */
+const MACRO_TEMPLATES = {
+  win_run:        `# Open Run dialog and launch notepad\nDELAY 500\nMOD_KEY GUI r\nDELAY 500\nSTRING notepad\nENTER`,
+  win_lock:       `# Lock Windows workstation\nMOD_KEY GUI l`,
+  win_screenshot: `# Screenshot to clipboard (Win)\nMOD_KEY GUI SHIFT s`,
+  win_terminal:   `# Open PowerShell as current user\nMOD_KEY GUI r\nDELAY 500\nSTRING powershell\nENTER`,
+  win_taskman:    `# Open Task Manager\nMOD_KEY CTRL SHIFT ESC`,
+  mac_terminal:   `# Open Terminal via Spotlight\nMOD_KEY GUI SPACE\nDELAY 400\nSTRING Terminal\nENTER`,
+  mac_spotlight:  `# Open Spotlight\nMOD_KEY GUI SPACE`,
+  mac_screenshot: `# Screenshot to clipboard (Mac)\nMOD_KEY CTRL SHIFT 4`,
+  mac_lock:       `# Lock macOS screen\nMOD_KEY CTRL GUI q`,
+  u_alttab:       `# Switch to next window\nMOD_KEY ALT TAB`,
+  u_close:        `# Close current tab / window\nMOD_KEY CTRL w`,
+  u_selectall:    `# Select all text and copy\nMOD_KEY CTRL a\nDELAY 100\nMOD_KEY CTRL c`,
+  u_undo:         `# Undo last action\nMOD_KEY CTRL z`,
+  u_save:         `# Save current file\nMOD_KEY CTRL s`,
+};
+document.getElementById('macroTemplate').onchange = function() {
+  const tpl = MACRO_TEMPLATES[this.value];
+  if (tpl) {
+    macroScriptEl.value = tpl;
+    updateLineNumbers();
+    this.value = '';
+    macroScriptEl.focus();
+  }
+};
+
 const macroScriptEl = document.getElementById('macroScript');
 const macroLineNums = document.getElementById('macroLineNums');
 
