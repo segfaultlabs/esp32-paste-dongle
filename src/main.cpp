@@ -1179,6 +1179,11 @@ static void start_web_ui() {
     // curl: curl -X POST http://192.168.4.1/api/fs/upload -F "file=@data/index.html"
     server.on("/api/fs/upload", HTTP_POST,
         [](AsyncWebServerRequest* request) {
+            if (LittleFS.totalBytes() == 0) {
+                request->send(503, "application/json",
+                              "{\"ok\":false,\"error\":\"filesystem not mounted\"}");
+                return;
+            }
             request->send(200, "application/json", "{\"ok\":true}");
         },
         [](AsyncWebServerRequest* /*req*/, const String& filename, size_t index,
@@ -1186,13 +1191,20 @@ static void start_web_ui() {
             static File upload_file;
             if (!index) {
                 String path = "/" + filename;
-                Serial.printf("[FS] Upload start: %s\n", path.c_str());
+                Serial.printf("[FS] Upload start: %s (FS total=%u)\n",
+                              path.c_str(), LittleFS.totalBytes());
                 upload_file = LittleFS.open(path, "w");
+                if (!upload_file) Serial.println("[FS] ERROR: open for write failed");
             }
             if (upload_file) upload_file.write(data, len);
-            if (final && upload_file) {
-                upload_file.close();
-                Serial.printf("[FS] Upload done: /%s (%u bytes)\n", filename.c_str(), index + len);
+            if (final) {
+                if (upload_file) {
+                    upload_file.close();
+                    Serial.printf("[FS] Upload done: /%s (%u bytes), FS used=%u\n",
+                                  filename.c_str(), index + len, LittleFS.usedBytes());
+                } else {
+                    Serial.println("[FS] Upload failed: file was not open");
+                }
             }
         }
     );
@@ -1407,6 +1419,28 @@ static void start_web_ui() {
         if (!request->hasParam("id")) { request->send(400, "text/plain", "missing id"); return; }
         snippets.erase(request->getParam("id")->value().toInt());
         request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    server.on("/api/fs/info", HTTP_GET, [](AsyncWebServerRequest* request) {
+        String body = "{";
+        body += "\"mounted\":" + String(LittleFS.totalBytes() > 0 ? "true" : "false");
+        body += ",\"index_html\":" + String(LittleFS.exists("/index.html") ? "true" : "false");
+        body += ",\"total\":" + String(LittleFS.totalBytes());
+        body += ",\"used\":"  + String(LittleFS.usedBytes());
+        File root = LittleFS.open("/");
+        body += ",\"files\":[";
+        bool first = true;
+        if (root) {
+            File f = root.openNextFile();
+            while (f) {
+                if (!first) body += ",";
+                body += "{\"name\":\"" + String(f.name()) + "\",\"size\":" + String(f.size()) + "}";
+                first = false;
+                f = root.openNextFile();
+            }
+        }
+        body += "]}";
+        request->send(200, "application/json", body);
     });
 
     server.on("/api/info", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -1635,11 +1669,21 @@ void setup() {
     delay(1000);
     Serial.println("Starting ESP32 Paste Dongle");
 
-    if (!LittleFS.begin(true)) {
-        Serial.println("[FS] LittleFS mount failed — filesystem will be empty");
+    // Explicitly name the partition ("littlefs" from partitions_4mb.csv).
+    // Without the label, ESP-IDF searches by subtype which can fail on some
+    // framework versions when board_build.filesystem=littlefs is set.
+    bool fs_ok = LittleFS.begin(false, "/littlefs", 10, "littlefs");
+    if (!fs_ok) {
+        Serial.println("[FS] Mount failed — formatting LittleFS partition...");
+        LittleFS.format();
+        fs_ok = LittleFS.begin(false, "/littlefs", 10, "littlefs");
+    }
+    if (fs_ok) {
+        Serial.printf("[FS] LittleFS mounted: %u / %u bytes used, index.html=%s\n",
+                      LittleFS.usedBytes(), LittleFS.totalBytes(),
+                      LittleFS.exists("/index.html") ? "yes" : "no");
     } else {
-        Serial.printf("[FS] LittleFS mounted, index.html %s\n",
-                      LittleFS.exists("/index.html") ? "found" : "not found (upload needed)");
+        Serial.println("[FS] LittleFS mount failed even after format — filesystem unavailable");
     }
 
     cfg.begin();
