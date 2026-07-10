@@ -6,29 +6,105 @@
 #include <HWCDC.h>
 #endif
 #include <WiFi.h>
+#include <DNSServer.h>
+#include <ESPmDNS.h>
 #include <ESPAsyncWebServer.h>
+#include <LittleFS.h>
 #include <Update.h>
+#include <esp_ota_ops.h>  // for esp_ota_mark_app_valid_cancel_rollback
+#include <freertos/queue.h>
 #include "hid/ihid_backend.h"
+#ifdef HID_BACKEND_USB
+#include "hid/usb_hid.h"
+#endif
 #include "keymap.h"
 #include "config_store.h"
 #include "typing_engine.h"
 #include "paster.h"
 #include "mouse_jiggler.h"
+#include "macro_parser.h"
+#include "macro_runner.h"
+#include "snippet_store.h"
+#include "led_controller.h"
+#include "human_sim.h"
 
 static hid::IHidBackend* backend = nullptr;
 static bool was_connected = false;
 static config::Store cfg;
+static snippet::Store snippets;
 static AsyncWebServer server(80);
 static AsyncWebSocket ws("/ws");
+static DNSServer dns_server;
 static paster::Paster* g_paster = nullptr;
 static jiggler::Jiggler* g_jiggler = nullptr;
+static macro::Runner* g_macro_runner = nullptr;
+static sim::HumanSim* g_sim = nullptr;
+static led::Controller g_led;
 
+// Command queue: WS-handler task pushes, main loop drains.
+// This eliminates data races between the AsyncTCP task and loop().
+struct WsCmd {
+    enum class Type { START, CHUNK, CANCEL, JIGGLE_ENABLE, JIGGLE_CFG, JIGGLE_GET,
+                      MACRO_RUN, MACRO_CANCEL } type;
+    uint32_t client_id = 0;
+    std::string text;
+    int total = -1;
+    typing::Config typing_cfg;
+    bool flag = false;
+    jiggler::Settings jiggle_cfg;
+    std::vector<macro::Command> macro_cmds;
+};
+static QueueHandle_t g_cmd_queue = nullptr;
+static const int CMD_QUEUE_DEPTH = 24;
+
+// Backpressure: ACK a chunk to the client only once the paste buffer drains
+// below this threshold so the phone can't flood RAM faster than we type.
+static const int PASTE_HIGH_WATER = 3072;
+static const int PASTE_LOW_WATER  = 1024;
+static uint32_t g_ack_client_id = 0;
+static bool g_pending_ack = false;
 
 static unsigned long last_status_ms = 0;
 static int last_reported_typed = -1;
 static paster::State last_reported_state = paster::State::IDLE;
 
+// Minimal fallback served when LittleFS has no index.html yet.
+// The full UI lives in data/index.html and is uploaded via `pio run -t uploadfs`
+// or via HTTP POST /api/fs/upload after the first serial flash.
 static const char INDEX_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paste Dongle — setup needed</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:540px;margin:3em auto;padding:0 1em;}
+code{background:#eee;padding:.1em .3em;border-radius:3px;}
+.card{background:#f8f9fa;border:1px solid #ddd;border-radius:6px;padding:1em 1.2em;margin:1em 0;}
+</style>
+</head>
+<body>
+<h1>PasteDongle</h1>
+<p>The UI file hasn't been uploaded to the device filesystem yet.</p>
+<div class="card">
+  <strong>Option 1 — serial flash (first time):</strong>
+  <pre>pio run -t uploadfs -e esp32s3-usb</pre>
+</div>
+<div class="card">
+  <strong>Option 2 — HTTP upload (after first serial flash):</strong>
+  <form method="post" enctype="multipart/form-data" action="/api/fs/upload">
+    <input type="file" name="file" accept=".html" required>
+    <button type="submit">Upload index.html</button>
+  </form>
+</div>
+</body>
+</html>
+)rawliteral";
+
+// Full INDEX_HTML placeholder — kept to avoid removing the rawliteral macro.
+// The real HTML lives in data/index.html served from LittleFS.
+static const char INDEX_HTML_UNUSED[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -38,49 +114,64 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <style>
 body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2em auto; padding: 0 1em; }
 h2 { margin-top: 1.8em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
-label { display: block; margin: 1em 0 0.25em; }
-input[type="text"], select, textarea { width: 100%; padding: 0.5em; box-sizing: border-box; font: inherit; }
+h3 { margin-top: 1.2em; }
+label { display: block; margin: 0.9em 0 0.2em; }
+input[type="text"], input[type="number"], select, textarea { width: 100%; padding: 0.5em; box-sizing: border-box; font: inherit; }
+input[type="range"] { width: 100%; }
 textarea { resize: vertical; }
 button { padding: 0.6em 1.2em; margin: 0.5em 0.5em 0 0; }
 #progressWrap { width: 100%; background: #e9ecef; border-radius: 0.25em; overflow: hidden; }
 #progressBar { width: 0%; height: 1.2em; background: #007bff; transition: width 0.2s; }
 .status { color: #555; margin-top: 0.5em; }
 #stats { font-size: 0.9em; color: #666; }
+.hint { font-size: 0.82em; color: #777; margin: 0.1em 0 0.5em; line-height: 1.4; }
+.card { background: #f8f9fa; border: 1px solid #e4e4e4; border-radius: 6px; padding: 0.9em 1.1em; margin: 0.8em 0; }
+code { background: #eee; border-radius: 3px; padding: 0.1em 0.3em; font-size: 0.88em; }
 </style>
 </head>
 <body>
 <h1>ESP32 Paste Dongle</h1>
+<p id="deviceInfoBar" style="color:#888;font-size:0.85em;margin:-0.8em 0 1em;">Connecting...</p>
 
+<section id="bleSection">
 <h2>Bluetooth name</h2>
-<p>Current BLE name: <strong id="cur">...</strong></p>
+<p class="hint">The name your device advertises over Bluetooth LE. Your host computer sees it as a keyboard with this name — useful for disguising the dongle as a known device. Requires a reboot to take effect.</p>
+<p>Current name: <strong id="cur">...</strong></p>
 <form id="cfgform">
   <label for="name">Advertise as</label>
   <input type="text" id="name" name="name" maxlength="31" placeholder="e.g. Logitech K380">
   <button type="submit">Save &amp; Reboot</button>
 </form>
+</section>
 
 <h2>Keyboard layout</h2>
-<p>Current layout: <strong id="layoutCur">US</strong></p>
+<p class="hint">Must match the keyboard layout configured in your host OS (System Settings → Keyboard). If this is wrong, characters like <code>@</code> <code>"</code> <code>#</code> and <code>\</code> will be typed incorrectly. When in doubt, use US.</p>
+<p>Active layout: <strong id="layoutCur">US</strong></p>
 <form id="layoutForm">
-  <label for="layout">Host keyboard layout</label>
+  <label for="layout">Host OS layout</label>
   <select id="layout">
     <option value="US">US QWERTY</option>
+    <option value="UK">UK QWERTY</option>
     <option value="DVORAK">Dvorak</option>
   </select>
+  <p class="hint">Changes take effect immediately — no reboot needed.</p>
   <button type="submit">Save layout</button>
 </form>
 
 <h2>Paste into host computer</h2>
-<label for="mode">Speed mode</label>
+<p class="hint">Paste text below, then tap <strong>Paste it</strong>. The dongle types it into whatever window is focused on the connected computer. Make sure your target text field is focused before pressing the button.</p>
+
+<label for="mode">Typing speed</label>
 <select id="mode">
-  <option value="max">Max Speed</option>
-  <option value="fast" selected>Fast Typist (~120 WPM)</option>
-  <option value="human">Human / Careful (~70 WPM)</option>
+  <option value="max">Max Speed — as fast as the host can accept (may drop chars in slow apps)</option>
+  <option value="fast" selected>Fast Typist — ~120 WPM with slight variation (recommended)</option>
+  <option value="human">Human / Careful — ~70 WPM, more variation, safer for web forms</option>
 </select>
 
 <label for="text">Text to type</label>
-<textarea id="text" rows="10" placeholder="Paste your text here..."></textarea>
+<textarea id="text" rows="10" placeholder="Paste your text here…"></textarea>
 <p id="stats">0 chars — estimated time: -</p>
+<p id="charWarn" style="display:none; color:#c05000; margin:0.25em 0 0;"></p>
 
 <button id="pasteBtn">Paste it</button>
 <button id="cancelBtn" disabled>Cancel</button>
@@ -90,22 +181,103 @@ button { padding: 0.6em 1.2em; margin: 0.5em 0.5em 0 0; }
 </div>
 <p class="status" id="pasteStatus">Connecting...</p>
 
+<h2>Saved snippets</h2>
+<p class="hint">Store up to 8 frequently-used text blocks. Hit <strong>Type</strong> to send one immediately without opening the paste area. Use <strong>Edit</strong> to change a snippet's content. Snippets survive reboots.</p>
+<div id="snippetList"><em>Loading...</em></div>
+<button id="saveSnippetBtn">Save current text as snippet</button>
+<div id="snippetEditArea" style="display:none;margin-top:0.8em;" class="card">
+  <strong>Edit snippet</strong>
+  <label for="editTitle" style="margin-top:0.6em;">Title</label>
+  <input type="text" id="editTitle" maxlength="64">
+  <label for="editText" style="margin-top:0.4em;">Text</label>
+  <textarea id="editText" rows="6"></textarea>
+  <div style="margin-top:0.4em;">
+    <button id="saveEditBtn">Save</button>
+    <button id="cancelEditBtn">Cancel</button>
+  </div>
+</div>
+
+<h2>Human simulation</h2>
+<p class="hint">Keeps your session alive on applications that track <em>keyboard</em> activity separately from mouse movement (e.g. some VPNs, remote desktop clients, meeting tools). The dongle types random words and erases them in a loop — it looks like someone is at the keyboard.</p>
+<p class="status" id="simStatus">Loading...</p>
+<label><input type="checkbox" id="simEnabled"> Enable human simulation</label>
+<p class="hint">Only runs when the paste and macro engine are both idle. Will not interfere with real pastes.</p>
+
+<label for="simPause">Pause between bursts (seconds)</label>
+<input type="number" id="simPause" min="5" max="300" value="18">
+<p class="hint">How long the dongle stays quiet between bursts. 18 s is a good default — long enough to be subtle, short enough to prevent idle timeouts on most systems.</p>
+
+<label for="simWords">Words per burst</label>
+<input type="number" id="simWords" min="2" max="20" value="8">
+<p class="hint">How many words to type before erasing. More words = longer visible activity periods.</p>
+
+<button id="simSaveBtn">Save simulation settings</button>
+
 <h2>Mouse jiggler</h2>
+<p class="hint">Moves the mouse cursor periodically to prevent screen lock, sleep, or idle timeouts. The <strong>Natural</strong> mode is specifically designed to be undetectable by anti-idle software.</p>
 <p id="jiggleStatus" class="status">Loading...</p>
 <label><input type="checkbox" id="jiggleEnabled"> Enable mouse jiggler</label>
-<label for="jiggleInterval">Interval (seconds)</label>
-<input type="number" id="jiggleInterval" min="1" max="600" value="30">
-<label for="jiggleDistance">Distance (pixels)</label>
-<input type="range" id="jiggleDistance" min="1" max="20" value="2">
-<label for="jigglePattern">Pattern</label>
+
+<label for="jigglePattern" style="margin-top:0.8em;">Mode</label>
 <select id="jigglePattern">
-  <option value="random">Random</option>
-  <option value="line">Line</option>
-  <option value="square">Square</option>
-  <option value="circle">Circle</option>
+  <option value="natural">Natural — Poisson intervals + organic drift (recommended)</option>
+  <option value="random">Random jumps (simple, somewhat detectable)</option>
+  <option value="line">Line (back and forth — very detectable)</option>
+  <option value="square">Square (geometric — very detectable)</option>
+  <option value="circle">Circle (geometric — very detectable)</option>
 </select>
-<label><input type="checkbox" id="jiggleRandomize"> Randomize interval (+/- 25%)</label>
-<button id="jiggleSaveBtn">Save jiggler settings</button>
+
+<div id="naturalControls">
+  <div class="card" style="margin-top:0.6em;">
+    <label for="jiggleMeanInterval">Mean interval (seconds): <strong id="jiggleMeanIntervalVal"></strong></label>
+    <input type="number" id="jiggleMeanInterval" min="5" max="600" value="30">
+    <p class="hint">The average time between movements. Each actual interval is drawn from a Poisson process — sometimes shorter, sometimes much longer — so there is no detectable heartbeat pattern.</p>
+
+    <label for="jiggleDriftRadius" style="margin-top:0.8em;">Drift radius (pixels): <span id="jiggleDriftRadiusVal">5</span></label>
+    <input type="range" id="jiggleDriftRadius" min="1" max="20" value="5">
+    <p class="hint">Maximum distance the cursor wanders from its starting position. 1–5 px is invisible on a normal monitor at arm's length. Higher values are slightly more "alive" but may be noticeable on very small screens.</p>
+
+    <label for="jiggleJitter" style="margin-top:0.8em;">Jitter level: <span id="jiggleJitterVal">50</span>%</label>
+    <input type="range" id="jiggleJitter" min="0" max="100" value="50">
+    <p class="hint">Controls how much random noise is applied to each movement step. 0% = cursor barely moves and returns quickly to centre. 100% = cursor actively drifts around within the radius. 40–60% is the sweet spot.</p>
+  </div>
+</div>
+
+<div id="geometricControls" style="display:none;">
+  <div class="card" style="margin-top:0.6em;">
+    <label for="jiggleInterval">Interval (seconds)</label>
+    <input type="number" id="jiggleInterval" min="1" max="600" value="30">
+    <p class="hint">Time between cursor movements. Fixed intervals are easy for detection software to identify.</p>
+
+    <label for="jiggleDistance" style="margin-top:0.8em;">Distance (pixels): <span id="jiggleDistVal">2</span></label>
+    <input type="range" id="jiggleDistance" min="1" max="50" value="2">
+    <p class="hint">How far the cursor moves each step. Visible movement begins around 10 px on a typical screen.</p>
+
+    <label style="margin-top:0.8em;"><input type="checkbox" id="jiggleRandomize"> Randomize interval (±25%)</label>
+    <p class="hint">Adds slight variation to the interval. Better than fully fixed, but the distribution is still uniform and can be detected with enough samples.</p>
+  </div>
+</div>
+
+<button id="jiggleSaveBtn" style="margin-top:0.6em;">Save jiggler settings</button>
+
+<h2>Device &amp; firmware</h2>
+<p class="hint">Live stats for the connected dongle. Free heap below ~80 kB may cause instability; if you see it drop that low, reboot.</p>
+<p class="status" id="deviceInfoFull">Loading...</p>
+<button id="rebootBtn">Reboot device</button>
+<p class="hint" style="margin-top:0.3em;">Performs a clean software reboot. Settings and snippets are preserved. The Wi-Fi AP will disappear for ~8 seconds while it restarts.</p>
+<p class="status" id="rebootStatus"></p>
+
+<h3 style="margin-top:1.4em;border-top:1px solid #ddd;padding-top:0.8em;">Update firmware (OTA)</h3>
+<p class="hint">Build in VS Code (PlatformIO → Build), then pick <code>.pio/build/esp32s3-usb/firmware.bin</code>. The dongle writes to the standby OTA slot and reboots — your previous firmware is kept and can be restored by re-flashing. The page reloads automatically after ~12 seconds.</p>
+<form id="otaForm">
+  <label for="otaFile">Firmware binary (.bin)</label>
+  <input type="file" id="otaFile" accept=".bin" style="padding:0.3em 0;">
+  <button type="submit" id="otaBtn" style="margin-top:0.4em;">Upload &amp; reboot</button>
+</form>
+<div id="otaProgressWrap" style="display:none;margin-top:0.6em;">
+  <div id="otaBar" style="height:1.2em;width:0%;background:#007bff;border-radius:0.25em;transition:width 0.3s;"></div>
+</div>
+<p class="status" id="otaStatus"></p>
 
 <script>
 const curEl = document.getElementById('cur');
@@ -123,14 +295,176 @@ const WPM = { max: 600, fast: 120, human: 70 };
 let ws = null;
 let ackResolve = null;
 let running = false;
+let supportedChars = null; // Set populated from /api/chars
+const charWarnEl = document.getElementById('charWarn');
 
-const jiggleEnabled = document.getElementById('jiggleEnabled');
-const jiggleInterval = document.getElementById('jiggleInterval');
-const jiggleDistance = document.getElementById('jiggleDistance');
-const jigglePattern = document.getElementById('jigglePattern');
-const jiggleRandomize = document.getElementById('jiggleRandomize');
-const jiggleSaveBtn = document.getElementById('jiggleSaveBtn');
-const jiggleStatus = document.getElementById('jiggleStatus');
+const jiggleEnabled      = document.getElementById('jiggleEnabled');
+const jiggleInterval     = document.getElementById('jiggleInterval');
+const jiggleMeanInterval = document.getElementById('jiggleMeanInterval');
+const jiggleDistance     = document.getElementById('jiggleDistance');
+const jiggleDriftRadius  = document.getElementById('jiggleDriftRadius');
+const jiggleJitter       = document.getElementById('jiggleJitter');
+const jigglePattern      = document.getElementById('jigglePattern');
+const jiggleRandomize    = document.getElementById('jiggleRandomize');
+const jiggleSaveBtn      = document.getElementById('jiggleSaveBtn');
+const jiggleStatus       = document.getElementById('jiggleStatus');
+
+function updateJiggleMode() {
+  const natural = jigglePattern.value === 'natural';
+  document.getElementById('naturalControls').style.display  = natural ? '' : 'none';
+  document.getElementById('geometricControls').style.display = natural ? 'none' : '';
+}
+jigglePattern.onchange = updateJiggleMode;
+
+function checkUnsupportedChars() {
+  if (!supportedChars) return;
+  const text = textEl.value;
+  let bad = 0;
+  const seen = new Set();
+  for (const ch of text) {
+    if (ch === '\n' || ch === '\r' || ch === '\t') continue;
+    if (!supportedChars.has(ch) && !seen.has(ch)) { bad++; seen.add(ch); }
+  }
+  if (bad > 0) {
+    charWarnEl.textContent = '⚠️ ' + bad + ' character' + (bad > 1 ? 's' : '') +
+      ' not supported by the ' + (layoutEl ? layoutEl.value : '') +
+      ' layout — they will be skipped when typing.';
+    charWarnEl.style.display = 'block';
+  } else {
+    charWarnEl.style.display = 'none';
+  }
+}
+
+// ---- Snippet store ---------------------------------------------------------
+const snippetListEl = document.getElementById('snippetList');
+const saveSnippetBtn = document.getElementById('saveSnippetBtn');
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function loadSnippets() {
+  try {
+    const list = await fetch('/api/snippets').then(r => r.json());
+    if (!list.length) { snippetListEl.innerHTML = '<em>No saved snippets.</em>'; return; }
+    snippetListEl.innerHTML = list.map(s =>
+      `<div style="margin:0.6em 0;padding:0.5em;border:1px solid #e0e0e0;border-radius:4px;">
+        <div style="display:flex;gap:0.4em;align-items:center;">
+          <strong style="flex:1;">${escHtml(s.title)}</strong>
+          <small style="color:#888;">${s.chars} chars</small>
+          <button onclick="typeSnippet(${s.id},this)">Type</button>
+          <button onclick="editSnippet(${s.id})">Edit</button>
+          <button onclick="deleteSnippet(${s.id})">Delete</button>
+        </div>
+        ${s.preview ? `<div style="margin-top:0.3em;font-size:0.82em;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(s.preview)}</div>` : ''}
+      </div>`
+    ).join('');
+  } catch(e) { snippetListEl.innerHTML = '<em>Failed to load snippets.</em>'; }
+}
+
+async function typeSnippet(id, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Typing…';
+  try {
+    await fetch('/api/snippets/type?id=' + id, { method: 'POST' });
+    btn.textContent = 'Sent ✓';
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+  } catch(e) {
+    btn.textContent = orig; btn.disabled = false;
+  }
+}
+
+async function deleteSnippet(id) {
+  if (!confirm('Delete this snippet?')) return;
+  await fetch('/api/snippets?id=' + id, { method: 'DELETE' });
+  loadSnippets();
+}
+
+let _editId = -1;
+const snippetEditArea = document.getElementById('snippetEditArea');
+const editTitleEl = document.getElementById('editTitle');
+const editTextEl  = document.getElementById('editText');
+
+async function editSnippet(id) {
+  try {
+    const s = await fetch('/api/snippets?id=' + id).then(r => r.json());
+    editTitleEl.value = s.title;
+    editTextEl.value  = s.text;
+    _editId = id;
+    snippetEditArea.style.display = 'block';
+    editTextEl.focus();
+  } catch(e) { alert('Could not load snippet.'); }
+}
+
+document.getElementById('saveEditBtn').onclick = async () => {
+  const title = editTitleEl.value.trim();
+  const text  = editTextEl.value;
+  if (!title) return;
+  const params = new URLSearchParams({ id: _editId, title, text });
+  await fetch('/api/snippets', { method: 'POST', body: params });
+  snippetEditArea.style.display = 'none';
+  _editId = -1;
+  loadSnippets();
+};
+
+document.getElementById('cancelEditBtn').onclick = () => {
+  snippetEditArea.style.display = 'none';
+  _editId = -1;
+};
+
+saveSnippetBtn.onclick = async () => {
+  const text = textEl.value.trim();
+  if (!text) { alert('Type or paste some text first.'); return; }
+  const title = prompt('Snippet name:', 'Snippet ' + Date.now());
+  if (!title) return;
+  const list = await fetch('/api/snippets').then(r => r.json());
+  const usedIds = new Set(list.map(s => s.id));
+  let slot = -1;
+  for (let i = 0; i < 8; i++) { if (!usedIds.has(i)) { slot = i; break; } }
+  if (slot < 0) { alert('All 8 snippet slots are full. Delete one first.'); return; }
+  const params = new URLSearchParams({ id: slot, title, text });
+  await fetch('/api/snippets', { method: 'POST', body: params });
+  loadSnippets();
+};
+
+// ---- End snippet store ----------------------------------------------------
+
+// ---- Human simulation -----------------------------------------------------
+const simStatusEl  = document.getElementById('simStatus');
+const simEnabledEl = document.getElementById('simEnabled');
+const simPauseEl   = document.getElementById('simPause');
+const simWordsEl   = document.getElementById('simWords');
+const simSaveBtn   = document.getElementById('simSaveBtn');
+
+async function loadSimConfig() {
+  try {
+    const j = await fetch('/api/sim').then(r => r.json());
+    simEnabledEl.checked = j.enabled;
+    simPauseEl.value = Math.round(j.pause_ms / 1000);
+    simWordsEl.value = j.words_per_burst;
+    simStatusEl.textContent = j.enabled
+      ? 'Active — typing random words and erasing them to simulate activity.'
+      : 'Inactive.';
+  } catch(e) { simStatusEl.textContent = 'Failed to load.'; }
+}
+
+simSaveBtn.onclick = async () => {
+  const params = new URLSearchParams({
+    enabled:         simEnabledEl.checked ? '1' : '0',
+    pause_ms:        String(Math.max(5, parseInt(simPauseEl.value,10) || 18) * 1000),
+    words_per_burst: String(Math.max(2, Math.min(20, parseInt(simWordsEl.value,10) || 8))),
+  });
+  await fetch('/api/sim', { method: 'POST', body: params });
+  await loadSimConfig();
+};
+// ---- End human simulation -------------------------------------------------
+
+function loadSupportedChars() {
+  fetch('/api/chars')
+    .then(r => r.json())
+    .then(j => { supportedChars = new Set(j.chars); checkUnsupportedChars(); })
+    .catch(() => {});
+}
 
 function updateStats() {
   const n = textEl.value.length;
@@ -143,6 +477,7 @@ function updateStats() {
     timeText = sec < 60 ? sec + ' s' : Math.round(sec / 60) + ' min ' + (sec % 60) + ' s';
   }
   statsEl.textContent = n + ' chars — estimated time: ' + timeText;
+  checkUnsupportedChars();
 }
 
 function setUiLocked(locked) {
@@ -153,47 +488,68 @@ function setUiLocked(locked) {
   if (locked) progressWrap.style.display = 'block';
 }
 
-function updateStatus(state, typed, total, pending, wpm) {
-  typed = parseInt(typed, 10);
-  total = parseInt(total, 10);
-  pending = parseInt(pending, 10);
-  wpm = parseInt(wpm, 10);
-  statusEl.textContent = state + ' | typed ' + typed + ' | pending ' + pending + ' | ' + wpm + ' WPM';
-  if (total > 0) {
-    progressBar.style.width = Math.min(100, Math.round(typed / total * 100)) + '%';
+function updateStatus(state, typed, total, pending, wpm, skipped) {
+  typed   = typed   | 0;
+  total   = total   | 0;
+  pending = pending | 0;
+  wpm     = wpm     | 0;
+  skipped = skipped | 0;
+
+  let statusText = state;
+  if (state === 'typing') {
+    if (total > 0) {
+      const pct = Math.min(100, Math.round(typed / total * 100));
+      const remaining = total - typed;
+      const etaSec = wpm > 0 ? Math.round(remaining * 60 / (wpm * 5)) : 0;
+      const etaStr = etaSec < 60 ? etaSec + ' s left' : Math.round(etaSec / 60) + ' min left';
+      statusText = pct + '% · ' + etaStr + ' · ' + wpm + ' WPM';
+      progressBar.style.width = pct + '%';
+      progressBar.style.opacity = '1';
+    } else {
+      // Total unknown — indeterminate: pulse the bar at full width
+      statusText = 'typing ' + typed + ' chars · ' + wpm + ' WPM';
+      progressBar.style.width = '100%';
+      progressBar.style.opacity = '0.35';
+    }
+  } else if (state === 'done') {
+    statusText = 'Done — typed ' + typed + ' chars';
+  } else if (state === 'cancelled') {
+    statusText = 'Cancelled after ' + typed + ' chars';
+  } else if (state === 'error') {
+    statusText = 'Error after ' + typed + ' chars';
   }
+  statusEl.textContent = statusText;
+
   if (state === 'done' || state === 'cancelled' || state === 'error') {
+    if (skipped > 0) {
+      statusEl.textContent += ' — ' + skipped + ' character' + (skipped > 1 ? 's' : '') +
+        ' had no keymap entry and were approximated or skipped.';
+    }
     running = false;
     setUiLocked(false);
     progressBar.style.width = '0%';
+    progressBar.style.opacity = '1';
   }
 }
 
 function connectWs() {
   ws = new WebSocket('ws://' + location.host + '/ws');
-  ws.onopen = () => { statusEl.textContent = 'Connected — pair the dongle with your computer, then paste.'; };
+  ws.onopen = () => {
+    statusEl.textContent = 'Connected — pair the dongle with your computer, then paste.';
+    ws.send(JSON.stringify({t:'jiggle_get'}));
+  };
   ws.onclose = () => { statusEl.textContent = 'Disconnected. Reconnecting...'; setTimeout(connectWs, 2000); };
   ws.onmessage = (ev) => {
-    const parts = ev.data.split('|');
-    const evName = parts[0];
-    if (evName === 'status') {
-      updateStatus(parts[1], parts[2], parts[3], parts[4], parts[5]);
-    } else if (evName === 'ack') {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch(e) { return; }
+    if (msg.t === 'status') {
+      updateStatus(msg.state, msg.typed, msg.total, msg.pending, msg.wpm, msg.skipped || 0);
+    } else if (msg.t === 'ack') {
       if (ackResolve) { ackResolve(); ackResolve = null; }
-    } else if (evName === 'done' || evName === 'cancelled' || evName === 'error') {
-      updateStatus(evName, parts[1] || '0', parts[2] || '0', '0', parts[3] || '0');
-    } else if (evName === 'jiggle_state') {
-      jiggleEnabled.checked = parts[1] === '1';
-      jiggleInterval.value = Math.max(1, Math.round((parts[2] || 30000) / 1000));
-      jiggleDistance.value = parts[3] || 2;
-      jigglePattern.value = parts[4] || 'random';
-      jiggleRandomize.checked = parts[5] === '1';
-      const hasMouse = parts[6] === '1';
-      jiggleStatus.textContent = hasMouse ? 'Mouse HID available' : 'Mouse HID not available on this backend';
-      jiggleEnabled.disabled = !hasMouse;
-      jiggleSaveBtn.disabled = !hasMouse;
-    } else if (evName === 'jiggle_ack') {
-      ws.send('jiggle_get');
+    } else if (msg.t === 'jiggle_state') {
+      applyJigglerState(msg);
+    } else if (msg.t === 'jiggle_ack') {
+      ws.send(JSON.stringify({t:'jiggle_get'}));
     }
   };
 }
@@ -211,18 +567,22 @@ async function doPaste() {
   running = true;
   setUiLocked(true);
 
-  ws.send('start|' + text.length + '|' + mode);
+  ws.send(JSON.stringify({t:'start', total:text.length, mode:mode}));
   for (let off = 0; off < text.length; off += chunkSize) {
     if (!running) break;
     const chunk = text.slice(off, off + chunkSize);
-    ws.send('chunk|' + chunk);
+    ws.send(JSON.stringify({t:'chunk', text:chunk}));
     await waitAck();
   }
   if (running) statusEl.textContent = 'Finishing...';
 }
 
 pasteBtn.onclick = () => doPaste().catch(e => { statusEl.textContent = 'Error: ' + e; setUiLocked(false); });
-cancelBtn.onclick = () => { ws.send('cancel'); running = false; };
+cancelBtn.onclick = () => {
+  ws.send(JSON.stringify({t:'cancel'}));
+  running = false;
+  if (ackResolve) { ackResolve(); ackResolve = null; }
+};
 textEl.oninput = updateStats;
 modeEl.onchange = updateStats;
 
@@ -267,23 +627,37 @@ document.getElementById('layoutForm').onsubmit = async (e) => {
       body: 'layout=' + encodeURIComponent(layout)
     });
     layoutCurEl.textContent = layout;
+    loadSupportedChars(); // refresh char set for new layout
   } catch (e) {
     console.error(e);
   }
 };
 
+function applyJigglerState(j) {
+  jiggleEnabled.checked = j.enabled;
+  jigglePattern.value   = j.pattern || 'natural';
+  // Natural controls
+  jiggleMeanInterval.value = Math.max(5, Math.round((j.interval_ms || 30000) / 1000));
+  jiggleDriftRadius.value  = j.ou_max_radius || 5;
+  jiggleJitter.value       = j.ou_jitter !== undefined ? j.ou_jitter : 50;
+  document.getElementById('jiggleDriftRadiusVal').textContent = jiggleDriftRadius.value;
+  document.getElementById('jiggleJitterVal').textContent      = jiggleJitter.value;
+  // Geometric controls
+  jiggleInterval.value  = Math.max(1, Math.round((j.interval_ms || 30000) / 1000));
+  jiggleDistance.value  = j.distance || 2;
+  document.getElementById('jiggleDistVal').textContent = j.distance || 2;
+  jiggleRandomize.checked = j.randomize || false;
+  const hasMouse = j.has_mouse;
+  jiggleStatus.textContent = hasMouse ? 'Mouse HID available' : 'Mouse HID not available on this backend';
+  jiggleEnabled.disabled = !hasMouse;
+  jiggleSaveBtn.disabled = !hasMouse;
+  updateJiggleMode();
+}
+
 async function loadJigglerConfig() {
   try {
     const j = await fetch('/api/jiggler').then(r => r.json());
-    jiggleEnabled.checked = j.enabled;
-    jiggleInterval.value = Math.max(1, Math.round(j.interval_ms / 1000));
-    jiggleDistance.value = j.distance;
-    jigglePattern.value = j.pattern || 'random';
-    jiggleRandomize.checked = j.randomize;
-    const hasMouse = j.has_mouse;
-    jiggleStatus.textContent = hasMouse ? 'Mouse HID available' : 'Mouse HID not available on this backend';
-    jiggleEnabled.disabled = !hasMouse;
-    jiggleSaveBtn.disabled = !hasMouse;
+    applyJigglerState(j);
   } catch (e) {
     console.error(e);
     jiggleStatus.textContent = 'Failed to load jiggler config';
@@ -291,25 +665,143 @@ async function loadJigglerConfig() {
 }
 
 jiggleSaveBtn.onclick = async () => {
+  const natural = jigglePattern.value === 'natural';
   const params = new URLSearchParams();
   params.append('enabled', jiggleEnabled.checked ? '1' : '0');
-  params.append('interval_ms', String(Math.max(1, parseInt(jiggleInterval.value, 10) || 1) * 1000));
-  params.append('distance', String(Math.max(1, Math.min(50, parseInt(jiggleDistance.value, 10) || 2))));
   params.append('pattern', jigglePattern.value);
-  params.append('randomize', jiggleRandomize.checked ? '1' : '0');
+  if (natural) {
+    params.append('interval_ms', String(Math.max(5, parseInt(jiggleMeanInterval.value, 10) || 30) * 1000));
+    params.append('ou_max_radius', String(Math.max(1, Math.min(20, parseInt(jiggleDriftRadius.value, 10) || 5))));
+    params.append('ou_jitter', String(Math.max(0, Math.min(100, parseInt(jiggleJitter.value, 10) || 50))));
+  } else {
+    params.append('interval_ms', String(Math.max(1, parseInt(jiggleInterval.value, 10) || 30) * 1000));
+    params.append('distance', String(Math.max(1, Math.min(50, parseInt(jiggleDistance.value, 10) || 2))));
+    params.append('randomize', jiggleRandomize.checked ? '1' : '0');
+  }
   try {
     await fetch('/api/jiggler', { method: 'POST', body: params });
-    jiggleStatus.textContent = 'Saved. Toggle will take effect immediately.';
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send('jiggle_get');
+    jiggleStatus.textContent = 'Saved.';
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({t:'jiggle_get'}));
   } catch (e) {
     jiggleStatus.textContent = 'Save failed: ' + e;
   }
 };
 
+document.getElementById('jiggleDistance').oninput    = (e) => { document.getElementById('jiggleDistVal').textContent = e.target.value; };
+document.getElementById('jiggleDriftRadius').oninput = (e) => { document.getElementById('jiggleDriftRadiusVal').textContent = e.target.value; };
+document.getElementById('jiggleJitter').oninput      = (e) => { document.getElementById('jiggleJitterVal').textContent = e.target.value; };
+
 loadJigglerConfig();
-if (ws) ws.send('jiggle_get');
+
+loadSupportedChars();
+loadSnippets();
+loadSimConfig();
+
+fetch('/api/status')
+  .then(r => r.json())
+  .then(j => {
+    if (j.backend === 'usb') {
+      document.getElementById('bleSection').style.display = 'none';
+    }
+  })
+  .catch(() => {});
 
 updateStats();
+
+// ---- Device info ----------------------------------------------------------
+function fmtUptime(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
+}
+async function loadDeviceInfo() {
+  try {
+    const j = await fetch('/api/info').then(r => r.json());
+    const heap = Math.round(j.free_heap / 1024);
+    const minH = Math.round(j.min_free_heap / 1024);
+    const bar  = `${j.backend.toUpperCase()} · v${j.firmware_version} · up ${fmtUptime(j.uptime_ms)} · heap ${heap} kB (min ${minH} kB)`;
+    document.getElementById('deviceInfoBar').textContent  = bar;
+    document.getElementById('deviceInfoFull').textContent = bar;
+  } catch(e) {
+    document.getElementById('deviceInfoFull').textContent = 'Device info unavailable (firmware pre-v0.7?)';
+  }
+}
+loadDeviceInfo();
+setInterval(loadDeviceInfo, 15000);
+
+// ---- OTA upload -----------------------------------------------------------
+const otaFileEl     = document.getElementById('otaFile');
+const otaBtnEl      = document.getElementById('otaBtn');
+const otaProgressWrap = document.getElementById('otaProgressWrap');
+const otaBarEl      = document.getElementById('otaBar');
+const otaStatusEl   = document.getElementById('otaStatus');
+
+document.getElementById('otaForm').onsubmit = (e) => {
+  e.preventDefault();
+  const file = otaFileEl.files[0];
+  if (!file) { otaStatusEl.textContent = 'Select a firmware .bin file first.'; return; }
+
+  const formData = new FormData();
+  formData.append('file', file, 'firmware.bin');
+
+  const xhr = new XMLHttpRequest();
+  otaBtnEl.disabled = true;
+  otaProgressWrap.style.display = 'block';
+  otaBarEl.style.width = '0%';
+  otaStatusEl.textContent = 'Uploading...';
+
+  xhr.upload.onprogress = (ev) => {
+    if (!ev.lengthComputable) return;
+    const pct = Math.round(ev.loaded / ev.total * 100);
+    otaBarEl.style.width = pct + '%';
+    otaStatusEl.textContent = `Uploading ${pct}%... (${Math.round(ev.loaded/1024)} / ${Math.round(ev.total/1024)} kB)`;
+  };
+
+  function startReloadCountdown(sec) {
+    const tick = () => {
+      otaStatusEl.textContent = `Upload complete — device rebooting. Page reloads in ${sec} s...`;
+      if (sec-- > 0) setTimeout(tick, 1000); else location.reload();
+    };
+    tick();
+  }
+
+  xhr.onload = () => {
+    otaBtnEl.disabled = false;
+    if (xhr.status === 200) {
+      otaBarEl.style.width = '100%';
+      startReloadCountdown(12);
+    } else if (xhr.status === 401) {
+      otaStatusEl.textContent = 'Error 401: invalid bearer token — check serial output.';
+    } else {
+      otaStatusEl.textContent = `Upload failed (HTTP ${xhr.status}): ${xhr.responseText}`;
+    }
+  };
+
+  xhr.onerror = () => {
+    otaBtnEl.disabled = false;
+    // The device reboots immediately after flashing, which drops the TCP connection
+    // and fires onerror even on success. Treat as success if upload reached 100%.
+    if (parseFloat(otaBarEl.style.width) >= 99) {
+      startReloadCountdown(15);
+    } else {
+      otaStatusEl.textContent = 'Connection lost — check serial output to see if flash succeeded.';
+    }
+  };
+
+  xhr.open('POST', '/api/update');
+  xhr.send(formData);
+};
+
+// ---- Reboot button --------------------------------------------------------
+document.getElementById('rebootBtn').onclick = async () => {
+  try { await fetch('/api/reboot', { method: 'POST' }); } catch (_) {}
+  let t = 8;
+  const tick = () => {
+    document.getElementById('rebootStatus').textContent = `Rebooting... page reloads in ${t} s`;
+    if (t-- > 0) setTimeout(tick, 1000); else location.reload();
+  };
+  tick();
+};
 </script>
 </body>
 </html>
@@ -436,12 +928,14 @@ static const char* state_name(paster::State s) {
 
 static void ws_broadcast_status() {
     paster::Status s = g_paster->status();
-    String msg = "status|";
+    String msg = "{\"t\":\"status\",\"state\":\"";
     msg += state_name(s.state);
-    msg += "|" + String(s.chars_typed);
-    msg += "|" + String(s.total_chars);
-    msg += "|" + String(s.pending);
-    msg += "|" + String(s.wpm);
+    msg += "\",\"typed\":"   + String(s.chars_typed);
+    msg += ",\"total\":"     + String(s.total_chars);
+    msg += ",\"pending\":"   + String(s.pending);
+    msg += ",\"wpm\":"       + String(s.wpm);
+    msg += ",\"skipped\":"   + String(s.skipped);
+    msg += "}";
     ws.textAll(msg);
 }
 
@@ -450,89 +944,185 @@ static void ws_send(AsyncWebSocketClient* client, const String& msg) {
 }
 
 static typing::Config mode_to_config(const String& mode) {
-    if (mode == "max") return typing::preset(typing::Mode::MAX_SPEED);
+    if (mode == "max")   return typing::preset(typing::Mode::MAX_SPEED);
     if (mode == "human") return typing::preset(typing::Mode::HUMAN);
     return typing::preset(typing::Mode::FAST_TYPIST);
 }
 
-static void handle_ws_message(AsyncWebSocketClient* client, const String& message) {
-    int sep = message.indexOf('|');
-    String cmd = sep < 0 ? message : message.substring(0, sep);
-    cmd.trim();
-    cmd.toLowerCase();
+// Push a heap-allocated command onto the queue. Drops (and frees) if queue full.
+static void push_cmd(WsCmd* c) {
+    if (!g_cmd_queue || xQueueSend(g_cmd_queue, &c, 0) != pdTRUE) {
+        delete c;
+    }
+}
 
-    if (cmd == "start") {
-        String rest = sep < 0 ? "" : message.substring(sep + 1);
-        int sep2 = rest.indexOf('|');
-        String total_str = sep2 < 0 ? rest : rest.substring(0, sep2);
-        String mode = sep2 < 0 ? "fast" : rest.substring(sep2 + 1);
-        int total = total_str.length() > 0 ? total_str.toInt() : -1;
-        if (total < 0) total = -1;
-        if (g_paster) {
-            g_paster->set_config(mode_to_config(mode));
-            g_paster->start(total);
-            ws_broadcast_status();
+static void handle_ws_message(AsyncWebSocketClient* client, const String& message) {
+    // Lambdas for flat JSON extraction — avoids file-scope String return type issues.
+    auto jstr = [&](const char* field) -> String {
+        String needle = String("\"") + field + "\":\"";
+        int p = message.indexOf(needle);
+        if (p < 0) return "";
+        p += needle.length();
+        String out;
+        while (p < (int)message.length()) {
+            char ch = message[p++];
+            if (ch == '"') break;
+            if (ch == '\\' && p < (int)message.length()) {
+                char esc = message[p++];
+                out += (esc=='n') ? '\n' : (esc=='r') ? '\r' : (esc=='t') ? '\t' : esc;
+                continue;
+            }
+            out += ch;
         }
-    } else if (cmd == "chunk") {
-        String text = sep < 0 ? "" : message.substring(sep + 1);
-        if (g_paster) {
-            g_paster->feed(std::string(text.c_str()));
-            paster::Status s = g_paster->status();
-            String ack = "ack|" + String(s.chars_typed) + "|" + String(s.pending);
-            ws_send(client, ack);
-            ws_broadcast_status();
+        return out;
+    };
+    auto jint = [&](const char* field, int def = 0) -> int {
+        String needle = String("\"") + field + "\":";
+        int p = message.indexOf(needle);
+        if (p < 0) return def;
+        p += needle.length();
+        while (p < (int)message.length() && message[p] == ' ') ++p;
+        return message.substring(p).toInt();
+    };
+    auto jbool = [&](const char* field, bool def = false) -> bool {
+        String needle = String("\"") + field + "\":";
+        int p = message.indexOf(needle);
+        if (p < 0) return def;
+        p += needle.length();
+        while (p < (int)message.length() && message[p] == ' ') ++p;
+        return message[p] == 't';
+    };
+
+    String t = jstr("t");
+
+    if (t == "start") {
+        auto* c = new WsCmd{};
+        c->type       = WsCmd::Type::START;
+        c->client_id  = client->id();
+        c->total      = jint("total", -1);
+        c->typing_cfg = mode_to_config(jstr("mode"));
+        push_cmd(c);
+    } else if (t == "chunk") {
+        auto* c = new WsCmd{};
+        c->type      = WsCmd::Type::CHUNK;
+        c->client_id = client->id();
+        c->text      = std::string(jstr("text").c_str());
+        push_cmd(c);
+    } else if (t == "cancel") {
+        auto* c = new WsCmd{};
+        c->type = WsCmd::Type::CANCEL;
+        push_cmd(c);
+    } else if (t == "ping") {
+        ws_send(client, "{\"t\":\"pong\"}");
+    } else if (t == "jiggle") {
+        auto* c = new WsCmd{};
+        c->type      = WsCmd::Type::JIGGLE_ENABLE;
+        c->client_id = client->id();
+        c->flag      = jbool("enabled");
+        push_cmd(c);
+    } else if (t == "jiggle_cfg") {
+        jiggler::Settings js{};
+        js.interval_ms        = static_cast<uint32_t>(jint("interval_ms", 30000));
+        js.distance           = static_cast<int8_t>(jint("distance", 2));
+        js.pattern            = jiggler::pattern_from_string(std::string(jstr("pattern").c_str()));
+        js.randomize_interval = jbool("randomize");
+        if (js.interval_ms < 1000) js.interval_ms = 1000;
+        if (js.distance < 1) js.distance = 1;
+        if (js.distance > 50) js.distance = 50;
+        auto* c = new WsCmd{};
+        c->type       = WsCmd::Type::JIGGLE_CFG;
+        c->client_id  = client->id();
+        c->jiggle_cfg = js;
+        push_cmd(c);
+    } else if (t == "jiggle_get") {
+        auto* c = new WsCmd{};
+        c->type      = WsCmd::Type::JIGGLE_GET;
+        c->client_id = client->id();
+        push_cmd(c);
+    }
+}
+
+// Drain the command queue and execute each command on the main-loop task.
+static void drain_cmd_queue() {
+    WsCmd* c = nullptr;
+    while (xQueueReceive(g_cmd_queue, &c, 0) == pdTRUE) {
+        switch (c->type) {
+            case WsCmd::Type::START:
+                if (g_paster) {
+                    g_paster->set_config(c->typing_cfg);
+                    g_paster->start(c->total);
+                    ws_broadcast_status();
+                }
+                break;
+            case WsCmd::Type::CHUNK:
+                if (g_paster) {
+                    g_paster->feed(c->text);
+                    int pending = g_paster->status().pending;
+                    if (pending < PASTE_HIGH_WATER) {
+                        paster::Status s = g_paster->status();
+                        String ack = "{\"t\":\"ack\",\"typed\":" + String(s.chars_typed)
+                                   + ",\"pending\":" + String(s.pending) + "}";
+                        ws.text(c->client_id, ack);
+                        ws_broadcast_status();
+                    } else {
+                        g_ack_client_id = c->client_id;
+                        g_pending_ack = true;
+                    }
+                }
+                break;
+            case WsCmd::Type::CANCEL:
+                if (g_paster) {
+                    g_paster->cancel();
+                    g_pending_ack = false;
+                    ws_broadcast_status();
+                }
+                break;
+            case WsCmd::Type::JIGGLE_ENABLE:
+                if (g_jiggler) {
+                    auto js = g_jiggler->get_settings();
+                    js.enabled = c->flag;
+                    g_jiggler->set_settings(js);
+                    cfg.set_jiggler_enabled(c->flag);
+                    ws.text(c->client_id, "{\"t\":\"jiggle_ack\"}");
+                }
+                break;
+            case WsCmd::Type::JIGGLE_CFG:
+                if (g_jiggler) {
+                    g_jiggler->set_settings(c->jiggle_cfg);
+                    cfg.set_jiggler_interval_ms(c->jiggle_cfg.interval_ms);
+                    cfg.set_jiggler_distance(c->jiggle_cfg.distance);
+                    cfg.set_jiggler_pattern(jiggler::pattern_to_string(c->jiggle_cfg.pattern));
+                    cfg.set_jiggler_randomize(c->jiggle_cfg.randomize_interval);
+                    cfg.set_jiggler_ou_radius(c->jiggle_cfg.ou_max_radius);
+                    cfg.set_jiggler_ou_jitter(c->jiggle_cfg.ou_jitter);
+                    ws.text(c->client_id, "{\"t\":\"jiggle_ack\"}");
+                }
+                break;
+            case WsCmd::Type::JIGGLE_GET: {
+                auto js = g_jiggler ? g_jiggler->get_settings() : jiggler::Settings{};
+                String msg = "{\"t\":\"jiggle_state\"";
+                msg += ",\"enabled\":"        + String(js.enabled ? "true" : "false");
+                msg += ",\"interval_ms\":"    + String(js.interval_ms);
+                msg += ",\"distance\":"       + String(js.distance);
+                msg += ",\"pattern\":\""      + String(jiggler::pattern_to_string(js.pattern)) + "\"";
+                msg += ",\"randomize\":"      + String(js.randomize_interval ? "true" : "false");
+                msg += ",\"ou_max_radius\":"  + String(js.ou_max_radius);
+                msg += ",\"ou_jitter\":"      + String(js.ou_jitter);
+                msg += ",\"has_mouse\":"      + String(backend && backend->has_mouse() ? "true" : "false");
+                msg += "}";
+                ws.text(c->client_id, msg);
+                break;
+            }
+            case WsCmd::Type::MACRO_RUN:
+                if (g_macro_runner) {
+                    g_macro_runner->start(std::move(c->macro_cmds), cfg.get_layout());
+                }
+                break;
+            case WsCmd::Type::MACRO_CANCEL:
+                if (g_macro_runner) g_macro_runner->cancel();
+                break;
         }
-    } else if (cmd == "cancel") {
-        if (g_paster) {
-            g_paster->cancel();
-            ws_broadcast_status();
-        }
-    } else if (cmd == "ping") {
-        ws_send(client, "pong");
-    } else if (cmd == "jiggle") {
-        String arg = sep < 0 ? "" : message.substring(sep + 1);
-        arg.trim();
-        bool on = (arg == "on" || arg == "1" || arg == "true");
-        if (g_jiggler) {
-            auto js = g_jiggler->get_settings();
-            js.enabled = on;
-            g_jiggler->set_settings(js);
-            cfg.set_jiggler_enabled(on);
-            ws_send(client, String("jiggle_ack|") + (on ? "on" : "off"));
-        }
-    } else if (cmd == "jiggle_cfg") {
-        String rest = sep < 0 ? "" : message.substring(sep + 1);
-        // interval|distance|pattern|randomize
-        int p1 = rest.indexOf('|');
-        int p2 = p1 < 0 ? -1 : rest.indexOf('|', p1 + 1);
-        int p3 = p2 < 0 ? -1 : rest.indexOf('|', p2 + 1);
-        if (p1 > 0 && p2 > p1 && p3 > p2) {
-            auto js = g_jiggler ? g_jiggler->get_settings() : jiggler::Settings{};
-            js.interval_ms = rest.substring(0, p1).toInt();
-            js.distance = static_cast<int8_t>(rest.substring(p1 + 1, p2).toInt());
-            js.pattern = jiggler::pattern_from_string(std::string(rest.substring(p2 + 1, p3).c_str()));
-            js.randomize_interval = (rest.substring(p3 + 1) == "1" || rest.substring(p3 + 1) == "true");
-            if (js.interval_ms < 1000) js.interval_ms = 1000;
-            if (js.distance < 1) js.distance = 1;
-            if (js.distance > 50) js.distance = 50;
-            if (g_jiggler) g_jiggler->set_settings(js);
-            cfg.set_jiggler_interval_ms(js.interval_ms);
-            cfg.set_jiggler_distance(js.distance);
-            cfg.set_jiggler_pattern(jiggler::pattern_to_string(js.pattern));
-            cfg.set_jiggler_randomize(js.randomize_interval);
-            ws_send(client, "jiggle_ack|cfg");
-        }
-    } else if (cmd == "jiggle_get") {
-        if (!g_jiggler) return;
-        auto js = g_jiggler->get_settings();
-        String msg = "jiggle_state|";
-        msg += js.enabled ? "1" : "0";
-        msg += "|" + String(js.interval_ms);
-        msg += "|" + String(js.distance);
-        msg += "|" + String(jiggler::pattern_to_string(js.pattern));
-        msg += "|" + String(js.randomize_interval ? "1" : "0");
-        msg += "|" + String(backend && backend->has_mouse() ? "1" : "0");
-        ws_send(client, msg);
+        delete c;
     }
 }
 
@@ -576,9 +1166,36 @@ static void start_web_ui() {
     ws.onEvent(on_ws_event);
     server.addHandler(&ws);
 
+    // Serve UI from LittleFS if available, fall back to the minimal PROGMEM page.
     server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send_P(200, "text/html", INDEX_HTML);
+        if (LittleFS.exists("/index.html")) {
+            request->send(LittleFS, "/index.html", "text/html");
+        } else {
+            request->send_P(200, "text/html", INDEX_HTML);
+        }
     });
+
+    // Upload a file to LittleFS (used to push index.html without a firmware reflash).
+    // curl: curl -X POST http://192.168.4.1/api/fs/upload -F "file=@data/index.html"
+    server.on("/api/fs/upload", HTTP_POST,
+        [](AsyncWebServerRequest* request) {
+            request->send(200, "application/json", "{\"ok\":true}");
+        },
+        [](AsyncWebServerRequest* /*req*/, const String& filename, size_t index,
+           uint8_t* data, size_t len, bool final) {
+            static File upload_file;
+            if (!index) {
+                String path = "/" + filename;
+                Serial.printf("[FS] Upload start: %s\n", path.c_str());
+                upload_file = LittleFS.open(path, "w");
+            }
+            if (upload_file) upload_file.write(data, len);
+            if (final && upload_file) {
+                upload_file.close();
+                Serial.printf("[FS] Upload done: /%s (%u bytes)\n", filename.c_str(), index + len);
+            }
+        }
+    );
 
     server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest* request) {
         String body = "{\"name\":\"";
@@ -626,6 +1243,235 @@ static void start_web_ui() {
         request->send(200, "text/plain", "saved");
     });
 
+    // Return all typeable characters for the current layout.
+    // The web UI uses this to warn about unsupported characters before pasting.
+    server.on("/api/chars", HTTP_GET, [](AsyncWebServerRequest* request) {
+        std::string chars = keymap::supported_chars(cfg.get_layout());
+        String body = "{\"layout\":\"";
+        body += cfg.get_layout().c_str();
+        body += "\",\"chars\":\"";
+        // Escape the string for safe JSON embedding.
+        for (char c : chars) {
+            if (c == '"')       body += "\\\"";
+            else if (c == '\\') body += "\\\\";
+            else                body += c;
+        }
+        body += "\"}";
+        request->send(200, "application/json", body);
+    });
+
+    // Run a macro script POSTed as form field "script".
+    server.on("/api/macro/run", HTTP_POST, [](AsyncWebServerRequest* request) {
+        if (!request->hasParam("script", true)) {
+            request->send(400, "text/plain", "missing script");
+            return;
+        }
+        String script = request->getParam("script", true)->value();
+        auto cmds = macro::parse(std::string(script.c_str()));
+        auto* c = new WsCmd{};
+        c->type = WsCmd::Type::MACRO_RUN;
+        c->macro_cmds = std::move(cmds);
+        push_cmd(c);
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    server.on("/api/macro/cancel", HTTP_POST, [](AsyncWebServerRequest* request) {
+        auto* c = new WsCmd{};
+        c->type = WsCmd::Type::MACRO_CANCEL;
+        push_cmd(c);
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    // ------ Human simulation -----------------------------------------------
+    server.on("/api/sim", HTTP_GET, [](AsyncWebServerRequest* request) {
+        sim::HumanSim::Config cfg = g_sim ? g_sim->get_config() : sim::HumanSim::Config{};
+        String body = "{";
+        body += "\"enabled\":"   + String(cfg.enabled ? "true" : "false");
+        body += ",\"char_delay_ms\":" + String(cfg.char_delay_ms);
+        body += ",\"pause_ms\":"      + String(cfg.pause_ms);
+        body += ",\"words_per_burst\":" + String(cfg.words_per_burst);
+        body += "}";
+        request->send(200, "application/json", body);
+    });
+
+    server.on("/api/sim", HTTP_POST, [](AsyncWebServerRequest* request) {
+        if (!g_sim) { request->send(500, "text/plain", "sim not initialized"); return; }
+        sim::HumanSim::Config sc = g_sim->get_config();
+        if (request->hasParam("enabled", true)) {
+            String v = request->getParam("enabled", true)->value();
+            sc.enabled = (v == "1" || v == "true");
+        }
+        if (request->hasParam("char_delay_ms", true))
+            sc.char_delay_ms = static_cast<uint32_t>(
+                request->getParam("char_delay_ms", true)->value().toInt());
+        if (request->hasParam("pause_ms", true))
+            sc.pause_ms = static_cast<uint32_t>(
+                request->getParam("pause_ms", true)->value().toInt());
+        if (request->hasParam("words_per_burst", true))
+            sc.words_per_burst = static_cast<uint8_t>(
+                request->getParam("words_per_burst", true)->value().toInt());
+        g_sim->set_config(sc);
+        cfg.set_sim_enabled(sc.enabled);
+        cfg.set_sim_pause_ms(sc.pause_ms);
+        cfg.set_sim_words_burst(sc.words_per_burst);
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    // ------ Snippet store endpoints ----------------------------------------
+
+    // GET /api/snippets          → JSON array of occupied slots (no text body)
+    // GET /api/snippets?id=N     → Full snippet including text
+    server.on("/api/snippets", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (request->hasParam("id")) {
+            int id = request->getParam("id")->value().toInt();
+            snippet::Snippet s = snippets.get(id);
+            if (s.id < 0) { request->send(404, "text/plain", "not found"); return; }
+            String body = "{\"id\":" + String(s.id);
+            body += ",\"title\":\"";
+            for (char c : s.title) { if (c=='"') body+="\\\""; else body+=c; }
+            body += "\",\"text\":\"";
+            for (char c : s.text)  { if (c=='"') body+="\\\""; else if(c=='\\') body+="\\\\"; else if(c=='\n') body+="\\n"; else body+=c; }
+            body += "\"}";
+            request->send(200, "application/json", body);
+        } else {
+            auto list = snippets.list();
+            String body = "[";
+            for (size_t i = 0; i < list.size(); ++i) {
+                if (i) body += ",";
+                const auto& s = list[i];
+                body += "{\"id\":" + String(s.id);
+                body += ",\"title\":\"";
+                for (char c : s.title) { if (c=='"') body+="\\\""; else body+=c; }
+                body += "\",\"chars\":" + String(s.text.size());
+                body += ",\"preview\":\"";
+                {
+                    size_t plen = std::min(s.text.size(), size_t(72));
+                    for (size_t pi = 0; pi < plen; ++pi) {
+                        char pc = s.text[pi];
+                        if (pc == '"')       body += "\\\"";
+                        else if (pc == '\\') body += "\\\\";
+                        else if (pc == '\n' || pc == '\r') body += ' ';
+                        else                 body += pc;
+                    }
+                    if (s.text.size() > 72) body += "...";
+                }
+                body += "\"}";
+            }
+            body += "]";
+            request->send(200, "application/json", body);
+        }
+    });
+
+    // POST /api/snippets/type — must be registered BEFORE /api/snippets POST
+    // because ESPAsyncWebServer does prefix matching and /api/snippets would
+    // swallow /api/snippets/type otherwise.
+    server.on("/api/snippets/type", HTTP_POST, [](AsyncWebServerRequest* request) {
+        int id = -1;
+        if (request->hasParam("id", true))
+            id = request->getParam("id", true)->value().toInt();
+        else if (request->hasParam("id"))
+            id = request->getParam("id")->value().toInt();
+        if (id < 0) { request->send(400, "text/plain", "missing id"); return; }
+        snippet::Snippet s = snippets.get(id);
+        if (s.id < 0) { request->send(404, "text/plain", "not found"); return; }
+        auto* cs = new WsCmd{}; cs->type = WsCmd::Type::START;
+        cs->total = static_cast<int>(s.text.size());
+        cs->typing_cfg = typing::preset(typing::Mode::FAST_TYPIST);
+        push_cmd(cs);
+        auto* cc = new WsCmd{}; cc->type = WsCmd::Type::CHUNK;
+        cc->text = s.text;
+        push_cmd(cc);
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    // POST /api/snippets with id=N&title=...&text=...  → save/overwrite
+    server.on("/api/snippets", HTTP_POST, [](AsyncWebServerRequest* request) {
+        if (!request->hasParam("id", true) || !request->hasParam("text", true)) {
+            request->send(400, "text/plain", "missing id or text");
+            return;
+        }
+        int id = request->getParam("id", true)->value().toInt();
+        String title = request->hasParam("title", true)
+                       ? request->getParam("title", true)->value()
+                       : String("Snippet ") + String(id);
+        String text  = request->getParam("text", true)->value();
+        if (!snippets.set(id, std::string(title.c_str()), std::string(text.c_str()))) {
+            request->send(400, "text/plain", "invalid id");
+            return;
+        }
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    // DELETE /api/snippets?id=N  → clear slot
+    server.on("/api/snippets", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        if (!request->hasParam("id")) { request->send(400, "text/plain", "missing id"); return; }
+        snippets.erase(request->getParam("id")->value().toInt());
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    server.on("/api/info", HTTP_GET, [](AsyncWebServerRequest* request) {
+        String body = "{";
+        body += "\"uptime_ms\":"   + String(millis());
+        body += ",\"free_heap\":"  + String(ESP.getFreeHeap());
+        body += ",\"min_free_heap\":" + String(ESP.getMinFreeHeap());
+        body += ",\"firmware_version\":\"" PASTE_DONGLE_VERSION "\"";
+#ifdef HID_BACKEND_USB
+        body += ",\"backend\":\"usb\"";
+#else
+        body += ",\"backend\":\"ble\"";
+#endif
+        body += "}";
+        request->send(200, "application/json", body);
+    });
+
+    server.on("/api/hid_identity", HTTP_GET, [](AsyncWebServerRequest* request) {
+        String body = "{";
+        body += "\"vid\":"  + String(cfg.get_usb_vid());
+        body += ",\"pid\":" + String(cfg.get_usb_pid());
+        body += ",\"manufacturer\":\"";
+        for (char c : cfg.get_usb_manufacturer()) { if (c=='"') body+="\\\""; else body+=c; }
+        body += "\",\"product\":\"";
+        for (char c : cfg.get_usb_product()) { if (c=='"') body+="\\\""; else body+=c; }
+        body += "\"}";
+        request->send(200, "application/json", body);
+    });
+
+    server.on("/api/hid_identity", HTTP_POST, [](AsyncWebServerRequest* request) {
+        bool changed = false;
+        if (request->hasParam("vid", true)) {
+            uint32_t v = static_cast<uint32_t>(strtoul(request->getParam("vid", true)->value().c_str(), nullptr, 16));
+            if (v > 0 && v <= 0xFFFF) { cfg.set_usb_vid(v); changed = true; }
+        }
+        if (request->hasParam("pid", true)) {
+            uint32_t v = static_cast<uint32_t>(strtoul(request->getParam("pid", true)->value().c_str(), nullptr, 16));
+            if (v <= 0xFFFF) { cfg.set_usb_pid(v); changed = true; }
+        }
+        if (request->hasParam("manufacturer", true)) {
+            String v = request->getParam("manufacturer", true)->value();
+            v.trim(); if (v.length() > 0) { cfg.set_usb_manufacturer(std::string(v.c_str())); changed = true; }
+        }
+        if (request->hasParam("product", true)) {
+            String v = request->getParam("product", true)->value();
+            v.trim(); if (v.length() > 0) { cfg.set_usb_product(std::string(v.c_str())); changed = true; }
+        }
+        (void)changed;
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* request) {
+#ifdef HID_BACKEND_USB
+        const char* backend_type = "usb";
+#else
+        const char* backend_type = "ble";
+#endif
+        String body = "{\"backend\":\"";
+        body += backend_type;
+        body += "\",\"connected\":";
+        body += (backend && backend->is_connected()) ? "true" : "false";
+        body += "}";
+        request->send(200, "application/json", body);
+    });
+
     server.on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest* request) {
         request->send(200, "text/plain", "rebooting");
         delay(100);
@@ -635,22 +1481,29 @@ static void start_web_ui() {
     server.on("/api/jiggler", HTTP_GET, [](AsyncWebServerRequest* request) {
         auto js = g_jiggler ? g_jiggler->get_settings() : jiggler::Settings{};
         String body = "{";
-        body += "\"enabled\":" + String(js.enabled ? "true" : "false");
+        body += "\"enabled\":"      + String(js.enabled ? "true" : "false");
         body += ",\"interval_ms\":" + String(js.interval_ms);
-        body += ",\"distance\":" + String(js.distance);
-        body += ",\"pattern\":\"" + String(jiggler::pattern_to_string(js.pattern)) + "\"";
-        body += ",\"randomize\":" + String(js.randomize_interval ? "true" : "false");
-        body += ",\"has_mouse\":" + String(backend && backend->has_mouse() ? "true" : "false");
+        body += ",\"distance\":"    + String(js.distance);
+        body += ",\"pattern\":\""   + String(jiggler::pattern_to_string(js.pattern)) + "\"";
+        body += ",\"randomize\":"   + String(js.randomize_interval ? "true" : "false");
+        body += ",\"ou_max_radius\":" + String(js.ou_max_radius);
+        body += ",\"ou_jitter\":"   + String(js.ou_jitter);
+        body += ",\"has_mouse\":"   + String(backend && backend->has_mouse() ? "true" : "false");
         body += "}";
         request->send(200, "application/json", body);
     });
 
     server.on("/api/jiggler", HTTP_POST, [](AsyncWebServerRequest* request) {
-        if (!g_jiggler) {
-            request->send(500, "text/plain", "jiggler not initialized");
-            return;
-        }
-        auto js = g_jiggler->get_settings();
+        // Read current settings from the config cache (written only by main loop —
+        // safe to read here). Build updated settings, push through command queue so
+        // the mutation happens on the main-loop task and avoids a data race with tick().
+        jiggler::Settings js{};
+        js.enabled           = cfg.get_jiggler_enabled();
+        js.interval_ms       = cfg.get_jiggler_interval_ms();
+        js.distance          = cfg.get_jiggler_distance();
+        js.pattern           = jiggler::pattern_from_string(cfg.get_jiggler_pattern());
+        js.randomize_interval = cfg.get_jiggler_randomize();
+
         bool changed = false;
         if (request->hasParam("enabled", true)) {
             String v = request->getParam("enabled", true)->value();
@@ -671,7 +1524,8 @@ static void start_web_ui() {
             changed = true;
         }
         if (request->hasParam("pattern", true)) {
-            js.pattern = jiggler::pattern_from_string(std::string(request->getParam("pattern", true)->value().c_str()));
+            js.pattern = jiggler::pattern_from_string(
+                std::string(request->getParam("pattern", true)->value().c_str()));
             changed = true;
         }
         if (request->hasParam("randomize", true)) {
@@ -679,13 +1533,23 @@ static void start_web_ui() {
             js.randomize_interval = (v == "1" || v == "true");
             changed = true;
         }
+        if (request->hasParam("ou_max_radius", true)) {
+            int v = request->getParam("ou_max_radius", true)->value().toInt();
+            if (v < 1) v = 1; if (v > 20) v = 20;
+            js.ou_max_radius = static_cast<uint8_t>(v);
+            changed = true;
+        }
+        if (request->hasParam("ou_jitter", true)) {
+            int v = request->getParam("ou_jitter", true)->value().toInt();
+            if (v < 0) v = 0; if (v > 100) v = 100;
+            js.ou_jitter = static_cast<uint8_t>(v);
+            changed = true;
+        }
         if (changed) {
-            g_jiggler->set_settings(js);
-            cfg.set_jiggler_enabled(js.enabled);
-            cfg.set_jiggler_interval_ms(js.interval_ms);
-            cfg.set_jiggler_distance(js.distance);
-            cfg.set_jiggler_pattern(jiggler::pattern_to_string(js.pattern));
-            cfg.set_jiggler_randomize(js.randomize_interval);
+            auto* c = new WsCmd{};
+            c->type = WsCmd::Type::JIGGLE_CFG;
+            c->jiggle_cfg = js;
+            push_cmd(c);
         }
         request->send(200, "application/json", "{\"ok\":true}");
     });
@@ -697,6 +1561,8 @@ static void start_web_ui() {
         [](AsyncWebServerRequest* request) {
             bool* ok_ptr = static_cast<bool*>(request->_tempObject);
             bool ok = ok_ptr ? *ok_ptr : false;
+            delete ok_ptr;
+            request->_tempObject = nullptr;
             if (ok) {
                 request->send(200, "application/json", "{\"ok\":true,\"reboot\":true}");
                 Serial.println("[OTA] Rebooting to apply update");
@@ -754,7 +1620,14 @@ static void start_web_ui() {
     );
 
     server.begin();
-    Serial.println("[Web] UI ready at http://" + WiFi.softAPIP().toString());
+    // Captive portal: redirect every DNS query to us so phones auto-open the UI.
+    dns_server.start(53, "*", WiFi.softAPIP());
+
+    if (MDNS.begin("paste")) {
+        MDNS.addService("http", "tcp", 80);
+        Serial.println("[mDNS] paste.local registered");
+    }
+    Serial.println("[Web] UI ready at http://" + WiFi.softAPIP().toString() + "  (also http://paste.local)");
 }
 
 void setup() {
@@ -762,10 +1635,18 @@ void setup() {
     delay(1000);
     Serial.println("Starting ESP32 Paste Dongle");
 
+    if (!LittleFS.begin(true)) {
+        Serial.println("[FS] LittleFS mount failed — filesystem will be empty");
+    } else {
+        Serial.printf("[FS] LittleFS mounted, index.html %s\n",
+                      LittleFS.exists("/index.html") ? "found" : "not found (upload needed)");
+    }
+
     cfg.begin();
     if (cfg.get_device_name().empty()) {
         cfg.set_device_name(DEVICE_NAME);
     }
+    snippets.begin();
     randomSeed(esp_random());
 
     Serial.print("Device name: ");
@@ -773,6 +1654,15 @@ void setup() {
     print_help();
 
     backend = hid::create_backend();
+#ifdef HID_BACKEND_USB
+    // Apply USB identity from NVS before the USB stack finalises descriptors.
+    static_cast<hid::UsbHidBackend*>(backend)->set_identity(
+        static_cast<uint16_t>(cfg.get_usb_vid()),
+        static_cast<uint16_t>(cfg.get_usb_pid()),
+        cfg.get_usb_manufacturer(),
+        cfg.get_usb_product()
+    );
+#endif
     if (!backend || !backend->begin()) {
         Serial.println("Failed to start HID backend");
         return;
@@ -781,18 +1671,32 @@ void setup() {
     Serial.printf("[Layout] host layout: %s\n", cfg.get_layout().c_str());
 
     g_paster = new paster::Paster(backend, typing::preset(typing::Mode::FAST_TYPIST));
+    g_macro_runner = new macro::Runner(backend);
+    g_sim = new sim::HumanSim(backend);
+    {
+        sim::HumanSim::Config sc;
+        sc.enabled         = cfg.get_sim_enabled();
+        sc.pause_ms        = cfg.get_sim_pause_ms();
+        sc.words_per_burst = cfg.get_sim_words_burst();
+        g_sim->set_config(sc);
+    }
+    g_led.begin();
 
     jiggler::Settings js;
-    js.enabled = cfg.get_jiggler_enabled();
-    js.interval_ms = cfg.get_jiggler_interval_ms();
-    js.distance = cfg.get_jiggler_distance();
-    js.pattern = jiggler::pattern_from_string(cfg.get_jiggler_pattern());
+    js.enabled            = cfg.get_jiggler_enabled();
+    js.interval_ms        = cfg.get_jiggler_interval_ms();
+    js.distance           = cfg.get_jiggler_distance();
+    js.pattern            = jiggler::pattern_from_string(cfg.get_jiggler_pattern());
     js.randomize_interval = cfg.get_jiggler_randomize();
+    js.ou_max_radius      = cfg.get_jiggler_ou_radius();
+    js.ou_jitter          = cfg.get_jiggler_ou_jitter();
     g_jiggler = new jiggler::Jiggler(backend);
     g_jiggler->set_settings(js);
     Serial.printf("[Jiggler] enabled=%d interval=%ums distance=%d pattern=%s random=%d\n",
                   js.enabled, js.interval_ms, js.distance,
                   jiggler::pattern_to_string(js.pattern), js.randomize_interval);
+
+    g_cmd_queue = xQueueCreate(CMD_QUEUE_DEPTH, sizeof(WsCmd*));
 
     Serial.println("Backend started. Waiting for host connection...");
     start_web_ui();
@@ -800,10 +1704,19 @@ void setup() {
 
 void loop() {
     if (!backend) return;
+    dns_server.processNextRequest();
 
-    if (Serial.available()) {
-        String line = Serial.readStringUntil('\n');
-        handle_serial_command(line);
+    while (Serial.available()) {
+        static String serial_buf;
+        char c = static_cast<char>(Serial.read());
+        if (c == '\n' || c == '\r') {
+            if (serial_buf.length() > 0) {
+                handle_serial_command(serial_buf);
+                serial_buf = "";
+            }
+        } else {
+            serial_buf += c;
+        }
     }
 
     bool connected = backend->is_connected();
@@ -812,12 +1725,49 @@ void loop() {
     }
     was_connected = connected;
 
+    drain_cmd_queue();
+
+    // Confirm the running firmware is valid once we've been up for 60 s.
+    // If this is never called after an OTA update and the device resets before
+    // 60 s, the bootloader will roll back to the previous slot automatically
+    // (requires CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y in sdkconfig).
+    static bool ota_confirmed = false;
+    if (!ota_confirmed && millis() > 60000) {
+        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+        ota_confirmed = true;
+        if (err == ESP_OK) {
+            Serial.println("[OTA] Firmware confirmed valid (60 s uptime)");
+        }
+        // ESP_ERR_INVALID_STATE means rollback is not enabled — harmless.
+    }
+
+    if (g_macro_runner) {
+        g_macro_runner->tick();
+    }
+
+    // Human sim only runs when paster and macro runner are both idle.
+    if (g_sim) {
+        bool paster_idle = !g_paster || g_paster->status().state != paster::State::TYPING;
+        bool macro_idle  = !g_macro_runner || !g_macro_runner->is_running();
+        if (paster_idle && macro_idle) g_sim->tick();
+    }
+
     if (g_jiggler) {
         g_jiggler->tick();
     }
 
     if (g_paster) {
         g_paster->tick();
+
+        // Send a deferred chunk ACK once the paste buffer drains enough.
+        if (g_pending_ack && g_paster->status().pending < PASTE_LOW_WATER) {
+            paster::Status s = g_paster->status();
+            String ack = "{\"t\":\"ack\",\"typed\":" + String(s.chars_typed)
+                       + ",\"pending\":" + String(s.pending) + "}";
+            ws.text(g_ack_client_id, ack);
+            g_pending_ack = false;
+            g_ack_client_id = 0;
+        }
 
         unsigned long now = millis();
         paster::Status s = g_paster->status();
@@ -830,6 +1780,23 @@ void loop() {
             last_status_ms = now;
         }
     }
+
+    // Update LED to reflect the current device state.
+    {
+        bool connected = backend->is_connected();
+        bool typing    = g_paster && g_paster->status().state == paster::State::TYPING;
+        bool macroing  = g_macro_runner && g_macro_runner->is_running();
+        bool simming   = g_sim && g_sim->is_enabled();
+        bool jiggling  = g_jiggler && g_jiggler->is_enabled();
+
+        if (!connected)  g_led.set_state(led::State::NO_HOST);
+        else if (typing) g_led.set_state(led::State::TYPING);
+        else if (macroing) g_led.set_state(led::State::MACRO);
+        else if (simming)  g_led.set_state(led::State::SIMULATING);
+        else if (jiggling) g_led.set_state(led::State::JIGGLING);
+        else               g_led.set_state(led::State::IDLE);
+    }
+    g_led.tick();
 
     delay(5);
 }

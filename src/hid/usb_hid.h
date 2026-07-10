@@ -28,10 +28,20 @@ public:
 
     void set_layout(const std::string& layout) override;
 
+    // Set USB device identity — must be called before begin().
+    // Changes take effect on the next USB enumeration (reboot).
+    void set_identity(uint16_t vid, uint16_t pid,
+                      const std::string& manufacturer,
+                      const std::string& product);
+
 private:
     USBHIDKeyboard& keyboard_;
     USBHIDMouse& mouse_;
-    std::string layout_ = "US";
+    std::string layout_       = "US";
+    uint16_t    vid_          = 0x303A;
+    uint16_t    pid_          = 0x1001;
+    std::string manufacturer_ = "Espressif";
+    std::string product_      = "USB HID Keyboard";
 
     void send_report(const keymap::Report& report);
 };

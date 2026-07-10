@@ -129,6 +129,44 @@ static const std::unordered_map<char, Report> dvorak_map = {
     {'~', Report(0x35, MOD_SHIFT, true)}, // QWERTY ` + shift
 };
 
+// UK ISO layout.  Start from the US map and override the characters
+// that differ when the host OS is set to UK QWERTY.
+//
+// Key differences (UK host perspective):
+//   Shift+2        → "  (US: @)
+//   Shift+3        → £  (US: #, but £ is non-ASCII so omitted here)
+//   Shift+'        → @  (US: ")
+//   Non-US # key   → #  (scancode 0x32, the key between ' and Enter on UK)
+//   Non-US # + SHF → ~
+//   ISO extra key  → \  (scancode 0x64, between left-shift and Z on UK ISO)
+//   ISO extra + SHF→ |
+static std::unordered_map<char, Report> build_uk_map() {
+    auto m = us_map; // inherit everything from US
+
+    // Swap @/" which are on different keys in UK
+    m['@']  = Report(0x34, MOD_SHIFT, true);  // shift + apostrophe key
+    m['"']  = Report(0x1F, MOD_SHIFT, true);  // shift + 2 key
+
+    // # and ~ live on the non-US hash key (0x32) between ' and Enter
+    m['#']  = Report(0x32, 0,         true);
+    m['~']  = Report(0x32, MOD_SHIFT, true);
+
+    // \ and | are on the ISO extra key (0x64) between left-shift and Z
+    m['\\'] = Report(0x64, 0,         true);
+    m['|']  = Report(0x64, MOD_SHIFT, true);
+
+    return m;
+}
+static const std::unordered_map<char, Report> uk_map = build_uk_map();
+
+// ---- per-layout helpers ------------------------------------------------
+
+static const std::unordered_map<char, Report>& map_for(const std::string& layout) {
+    if (layout == "UK")     return uk_map;
+    if (layout == "DVORAK") return dvorak_map;
+    return us_map;
+}
+
 static Report dvorak_lookup_char(char ch) {
     auto it = dvorak_map.find(ch);
     if (it != dvorak_map.end()) return it->second;
@@ -136,31 +174,26 @@ static Report dvorak_lookup_char(char ch) {
 }
 
 Report lookup(char ch, const std::string& layout) {
-    if (!is_supported(layout)) {
-        return {0, 0, false};
-    }
+    if (!is_supported(layout)) return {0, 0, false};
 
     if (layout == "DVORAK") {
         Report r = dvorak_lookup_char(ch);
         if (r.valid) return r;
-        // Fall through for uppercase letters not explicitly in dvorak_map.
         if (ch >= 'A' && ch <= 'Z') {
             Report lower = dvorak_lookup_char(static_cast<char>(ch - 'A' + 'a'));
-            if (lower.valid) {
-                lower.modifiers |= MOD_SHIFT;
-                return lower;
-            }
+            if (lower.valid) { lower.modifiers |= MOD_SHIFT; return lower; }
         }
         return {0, 0, false};
     }
 
-    // US QWERTY.
-    auto it = us_map.find(ch);
-    if (it != us_map.end()) return it->second;
+    // US and UK share the same uppercase fallback logic.
+    const auto& m = map_for(layout);
+    auto it = m.find(ch);
+    if (it != m.end()) return it->second;
 
     if (ch >= 'A' && ch <= 'Z') {
-        auto lower = us_map.find(static_cast<char>(ch - 'A' + 'a'));
-        if (lower != us_map.end()) {
+        auto lower = m.find(static_cast<char>(ch - 'A' + 'a'));
+        if (lower != m.end()) {
             Report r = lower->second;
             r.modifiers |= MOD_SHIFT;
             return r;
@@ -170,11 +203,25 @@ Report lookup(char ch, const std::string& layout) {
 }
 
 std::vector<std::string> layouts() {
-    return {"US", "DVORAK"};
+    return {"US", "UK", "DVORAK"};
 }
 
 bool is_supported(const std::string& layout) {
-    return layout == "US" || layout == "DVORAK";
+    return layout == "US" || layout == "UK" || layout == "DVORAK";
+}
+
+std::string supported_chars(const std::string& layout) {
+    const auto& m = map_for(layout);
+    std::string out;
+    out.reserve(m.size() * 2);
+    for (const auto& kv : m) {
+        out += kv.first;
+    }
+    // Also add uppercase variants that are derived at lookup time.
+    for (char c = 'A'; c <= 'Z'; ++c) {
+        out += c;
+    }
+    return out;
 }
 
 } // namespace keymap

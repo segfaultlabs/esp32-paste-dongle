@@ -3,6 +3,7 @@
 #ifdef HID_BACKEND_USB
 
 #include <Arduino.h>
+#include <tusb.h>
 #include "../keymap.h"
 
 namespace hid {
@@ -17,21 +18,38 @@ static USBHIDMouse g_mouse;
 
 UsbHidBackend::UsbHidBackend() : keyboard_(g_keyboard), mouse_(g_mouse) {}
 
+void UsbHidBackend::set_identity(uint16_t vid, uint16_t pid,
+                                  const std::string& manufacturer,
+                                  const std::string& product) {
+    vid_          = vid;
+    pid_          = pid;
+    manufacturer_ = manufacturer;
+    product_      = product;
+}
+
 bool UsbHidBackend::begin() {
+    // Apply USB device identity before starting the stack.
+    // These must be set before USB.begin() so the host sees the correct values
+    // during enumeration. Changes take effect on each reboot/re-enumeration.
+    USB.VID(vid_);
+    USB.PID(pid_);
+    USB.manufacturerName(manufacturer_.c_str());
+    USB.productName(product_.c_str());
+
     // The HID objects were already registered during static construction.
     // Now we just finish their setup and ensure the USB stack is started.
     keyboard_.begin();
     mouse_.begin();
     bool usb_started = USB.begin();
-    Serial.printf("USB HID backend initialized (USB.begin=%s, HID intf registered)\n",
-                  usb_started ? "ok" : "failed");
-    return usb_started;
+    Serial.printf("[USB] VID=%04X PID=%04X mfr='%s' prod='%s' begin=%s\n",
+                  vid_, pid_, manufacturer_.c_str(), product_.c_str(),
+                  usb_started ? "ok" : "already started");
+    return true;
 }
 
 bool UsbHidBackend::is_connected() {
-    // USBHIDKeyboard does not expose a simple isConnected().
-    // For the proof of concept we assume connected after begin().
-    return true;
+    // tud_mounted() is true once the host has enumerated the USB HID interface.
+    return tud_mounted();
 }
 
 void UsbHidBackend::send_report(const keymap::Report& report) {
@@ -40,7 +58,7 @@ void UsbHidBackend::send_report(const keymap::Report& report) {
     kr.keys[0] = report.keycode;
     keyboard_.sendReport(&kr);
     // Briefly hold the key so the host sees a real press, then release.
-    delayMicroseconds(500);
+    vTaskDelay(1); // yield for one RTOS tick instead of busy-waiting
     kr.keys[0] = 0;
     keyboard_.sendReport(&kr);
 }
@@ -68,7 +86,7 @@ bool UsbHidBackend::send_key(uint8_t keycode, uint8_t modifiers) {
     kr.modifiers = modifiers;
     kr.keys[0] = keycode;
     keyboard_.sendReport(&kr);
-    delayMicroseconds(500);
+    vTaskDelay(1); // yield for one RTOS tick instead of busy-waiting
     kr.keys[0] = 0;
     keyboard_.sendReport(&kr);
     return true;

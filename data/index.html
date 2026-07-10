@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paste Dongle</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2em auto; padding: 0 1em; }
+h2 { margin-top: 1.8em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
+h3 { margin-top: 1.2em; }
+label { display: block; margin: 0.9em 0 0.2em; }
+input[type="text"], input[type="number"], select, textarea { width: 100%; padding: 0.5em; box-sizing: border-box; font: inherit; }
+input[type="range"] { width: 100%; }
+textarea { resize: vertical; }
+button { padding: 0.6em 1.2em; margin: 0.5em 0.5em 0 0; }
+#progressWrap { width: 100%; background: #e9ecef; border-radius: 0.25em; overflow: hidden; }
+#progressBar { width: 0%; height: 1.2em; background: #007bff; transition: width 0.2s; }
+.status { color: #555; margin-top: 0.5em; }
+#stats { font-size: 0.9em; color: #666; }
+.hint { font-size: 0.82em; color: #777; margin: 0.1em 0 0.5em; line-height: 1.4; }
+.card { background: #f8f9fa; border: 1px solid #e4e4e4; border-radius: 6px; padding: 0.9em 1.1em; margin: 0.8em 0; }
+code { background: #eee; border-radius: 3px; padding: 0.1em 0.3em; font-size: 0.88em; }
+details summary { cursor: pointer; font-weight: 600; user-select: none; }
+.macro-ref td { padding: 0.25em 0.5em; vertical-align: top; font-size: 0.85em; }
+.macro-ref td:first-child { white-space: nowrap; }
+</style>
+</head>
+<body>
+<h1>ESP32 Paste Dongle</h1>
+<p id="deviceInfoBar" style="color:#888;font-size:0.85em;margin:-0.8em 0 1em;">Connecting...</p>
+
+<section id="bleSection">
+<h2>Bluetooth name</h2>
+<p class="hint">The name your device advertises over Bluetooth LE. Your host computer sees it as a keyboard with this name — useful for disguising the dongle as a known device. Requires a reboot to take effect.</p>
+<p>Current name: <strong id="cur">...</strong></p>
+<form id="cfgform">
+  <label for="name">Advertise as</label>
+  <input type="text" id="name" name="name" maxlength="31" placeholder="e.g. Logitech K380">
+  <button type="submit">Save &amp; Reboot</button>
+</form>
+</section>
+
+<h2>Keyboard layout</h2>
+<p class="hint">Must match the keyboard layout configured in your host OS (System Settings → Keyboard). If this is wrong, characters like <code>@</code> <code>"</code> <code>#</code> and <code>\</code> will be typed incorrectly. When in doubt, use US.</p>
+<p>Active layout: <strong id="layoutCur">US</strong></p>
+<form id="layoutForm">
+  <label for="layout">Host OS layout</label>
+  <select id="layout">
+    <option value="US">US QWERTY</option>
+    <option value="UK">UK QWERTY</option>
+    <option value="DVORAK">Dvorak</option>
+  </select>
+  <p class="hint">Changes take effect immediately — no reboot needed.</p>
+  <button type="submit">Save layout</button>
+</form>
+
+<h2>Paste into host computer</h2>
+<p class="hint">Paste text below, then tap <strong>Paste it</strong>. The dongle types it into whatever window is focused on the connected computer. Make sure your target text field is focused before pressing the button.</p>
+
+<label for="mode">Typing speed</label>
+<select id="mode">
+  <option value="max">Max Speed — as fast as the host can accept (may drop chars in slow apps)</option>
+  <option value="fast" selected>Fast Typist — ~120 WPM with slight variation (recommended)</option>
+  <option value="human">Human / Careful — ~70 WPM, more variation, safer for web forms</option>
+</select>
+
+<label for="text">Text to type</label>
+<textarea id="text" rows="10" placeholder="Paste your text here…"></textarea>
+<p id="stats">0 chars — estimated time: -</p>
+<p id="charWarn" style="display:none; color:#c05000; margin:0.25em 0 0;"></p>
+
+<button id="pasteBtn">Paste it</button>
+<button id="cancelBtn" disabled>Cancel</button>
+
+<div id="progressWrap" style="display:none; margin-top:1em;">
+  <div id="progressBar"></div>
+</div>
+<p class="status" id="pasteStatus">Connecting...</p>
+
+<h2>Saved snippets</h2>
+<p class="hint">Store up to 8 frequently-used text blocks. Hit <strong>Type</strong> to send one immediately without opening the paste area. Use <strong>Edit</strong> to change a snippet's content. Snippets survive reboots.</p>
+<div id="snippetList"><em>Loading...</em></div>
+<button id="saveSnippetBtn">Save current text as snippet</button>
+<div id="snippetEditArea" style="display:none;margin-top:0.8em;" class="card">
+  <strong>Edit snippet</strong>
+  <label for="editTitle" style="margin-top:0.6em;">Title</label>
+  <input type="text" id="editTitle" maxlength="64">
+  <label for="editText" style="margin-top:0.4em;">Text</label>
+  <textarea id="editText" rows="6"></textarea>
+  <div style="margin-top:0.4em;">
+    <button id="saveEditBtn">Save</button>
+    <button id="cancelEditBtn">Cancel</button>
+  </div>
+</div>
+
+<h2>Macros</h2>
+<p class="hint">Run a sequence of key presses, text, and delays from a simple script. Useful for login sequences, keyboard shortcuts, or anything that needs precise timing. The macro runs on the device — your target window must be focused.</p>
+
+<div class="card">
+  <details>
+    <summary>Script syntax reference</summary>
+    <table class="macro-ref" style="margin-top:0.6em;width:100%;border-collapse:collapse;">
+      <tr><td><code>STRING Hello World</code></td><td class="hint">Type text literally, character by character</td></tr>
+      <tr><td><code>DELAY 500</code></td><td class="hint">Pause for 500 milliseconds</td></tr>
+      <tr><td><code>KEY ENTER</code></td><td class="hint">Press a named key</td></tr>
+      <tr><td><code>KEY TAB</code></td><td class="hint">Tab key</td></tr>
+      <tr><td><code>KEY ESCAPE</code></td><td class="hint">Escape</td></tr>
+      <tr><td><code>KEY BACKSPACE</code></td><td class="hint">Backspace</td></tr>
+      <tr><td><code>KEY SPACE</code></td><td class="hint">Space bar</td></tr>
+      <tr><td><code>KEY UP / DOWN / LEFT / RIGHT</code></td><td class="hint">Arrow keys</td></tr>
+      <tr><td><code>KEY F1 … KEY F12</code></td><td class="hint">Function keys</td></tr>
+      <tr><td><code>MOD_KEY CTRL c</code></td><td class="hint">Ctrl+C (copy)</td></tr>
+      <tr><td><code>MOD_KEY CTRL v</code></td><td class="hint">Ctrl+V (paste)</td></tr>
+      <tr><td><code>MOD_KEY SHIFT ENTER</code></td><td class="hint">Shift+Enter (new line without submit)</td></tr>
+      <tr><td><code>MOD_KEY GUI r</code></td><td class="hint">Win+R (Run dialog) or Cmd+R (macOS reload)</td></tr>
+      <tr><td><code>MOD_KEY CTRL ALT DEL</code></td><td class="hint">Three-finger salute</td></tr>
+    </table>
+    <p class="hint" style="margin-top:0.6em;">Modifiers: <code>CTRL</code> <code>SHIFT</code> <code>ALT</code> <code>GUI</code> (Windows key / Cmd). One command per line.</p>
+  </details>
+</div>
+
+<label for="macroScript">Script</label>
+<textarea id="macroScript" rows="7" placeholder="STRING Hello&#10;DELAY 200&#10;KEY ENTER"></textarea>
+
+<button id="macroRunBtn">Run macro</button>
+<button id="macroCancelBtn" disabled>Cancel</button>
+<p class="status" id="macroStatus"></p>
+
+<h2>Human simulation</h2>
+<p class="hint">Keeps your session alive on applications that track <em>keyboard</em> activity separately from mouse movement (e.g. some VPNs, remote desktop clients, meeting tools). The dongle types random words and erases them in a loop — it looks like someone is at the keyboard.</p>
+<p class="status" id="simStatus">Loading...</p>
+<label><input type="checkbox" id="simEnabled"> Enable human simulation</label>
+<p class="hint">Only runs when the paste and macro engine are both idle. Will not interfere with real pastes.</p>
+
+<label for="simPause">Pause between bursts (seconds)</label>
+<input type="number" id="simPause" min="5" max="300" value="18">
+<p class="hint">How long the dongle stays quiet between bursts. 18 s is a good default — long enough to be subtle, short enough to prevent idle timeouts on most systems.</p>
+
+<label for="simWords">Words per burst</label>
+<input type="number" id="simWords" min="2" max="20" value="8">
+<p class="hint">How many words to type before erasing. More words = longer visible activity periods.</p>
+
+<label for="simCharDelay">Typing speed: <span id="simCharDelayVal">130</span> ms/char (~<span id="simCharDelayWpm">92</span> WPM)</label>
+<input type="range" id="simCharDelay" min="40" max="300" value="130">
+<p class="hint">How fast the simulation types each character. Slower speeds look more human; faster speeds are less noticeable but may look odd if the cursor is visible. 100–150 ms/char is the natural human range.</p>
+
+<button id="simSaveBtn">Save simulation settings</button>
+
+<h2>Mouse jiggler</h2>
+<p class="hint">Moves the mouse cursor periodically to prevent screen lock, sleep, or idle timeouts. The <strong>Natural</strong> mode is specifically designed to be undetectable by anti-idle software.</p>
+<p id="jiggleStatus" class="status">Loading...</p>
+<label><input type="checkbox" id="jiggleEnabled"> Enable mouse jiggler</label>
+
+<label for="jigglePattern" style="margin-top:0.8em;">Mode</label>
+<select id="jigglePattern">
+  <option value="natural">Natural — Poisson intervals + organic drift (recommended)</option>
+  <option value="random">Random jumps (simple, somewhat detectable)</option>
+  <option value="line">Line (back and forth — very detectable)</option>
+  <option value="square">Square (geometric — very detectable)</option>
+  <option value="circle">Circle (geometric — very detectable)</option>
+</select>
+
+<div id="naturalControls">
+  <div class="card" style="margin-top:0.6em;">
+    <label for="jiggleMeanInterval">Mean interval (seconds)</label>
+    <input type="number" id="jiggleMeanInterval" min="5" max="600" value="30">
+    <p class="hint">The average time between movements. Each actual interval is drawn from a Poisson process — sometimes shorter, sometimes much longer — so there is no detectable heartbeat pattern.</p>
+
+    <label for="jiggleDriftRadius" style="margin-top:0.8em;">Drift radius (pixels): <span id="jiggleDriftRadiusVal">5</span></label>
+    <input type="range" id="jiggleDriftRadius" min="1" max="20" value="5">
+    <p class="hint">Maximum distance the cursor wanders from its starting position. 1–5 px is invisible on a normal monitor at arm's length.</p>
+
+    <label for="jiggleJitter" style="margin-top:0.8em;">Jitter level: <span id="jiggleJitterVal">50</span>%</label>
+    <input type="range" id="jiggleJitter" min="0" max="100" value="50">
+    <p class="hint">How much random noise per movement step. 0% = barely drifts. 100% = actively wanders. 40–60% is the sweet spot.</p>
+  </div>
+</div>
+
+<div id="geometricControls" style="display:none;">
+  <div class="card" style="margin-top:0.6em;">
+    <label for="jiggleInterval">Interval (seconds)</label>
+    <input type="number" id="jiggleInterval" min="1" max="600" value="30">
+    <p class="hint">Time between cursor movements. Fixed intervals are easy for detection software to identify.</p>
+
+    <label for="jiggleDistance" style="margin-top:0.8em;">Distance (pixels): <span id="jiggleDistVal">2</span></label>
+    <input type="range" id="jiggleDistance" min="1" max="50" value="2">
+    <p class="hint">How far the cursor moves each step. Visible movement begins around 10 px on a typical screen.</p>
+
+    <label style="margin-top:0.8em;"><input type="checkbox" id="jiggleRandomize"> Randomize interval (±25%)</label>
+    <p class="hint">Adds slight variation to the interval. Better than fully fixed, but still detectable with enough samples.</p>
+  </div>
+</div>
+
+<button id="jiggleSaveBtn" style="margin-top:0.6em;">Save jiggler settings</button>
+
+<section id="hidSection" style="display:none;">
+<h2>HID Identity</h2>
+<p class="hint">Change how this device appears to the host OS — the manufacturer, product name, and USB vendor/product IDs. Pick a preset to impersonate a common keyboard or mouse, or enter custom values. <strong>Requires a reboot to take effect.</strong></p>
+<p class="hint" style="color:#b05000;">Using another manufacturer's VID/PID is fine for personal use. Do not distribute firmware with cloned IDs.</p>
+
+<label for="hidPreset">Preset profile</label>
+<select id="hidPreset">
+  <optgroup label="Keyboards">
+    <option value="generic_kb">Generic HID Keyboard (default)</option>
+    <option value="k380">Logitech K380 Multi-Device Keyboard</option>
+    <option value="mx_keys">Logitech MX Keys</option>
+    <option value="magic_kb">Apple Magic Keyboard</option>
+    <option value="dell_kb216">Dell KB216 Keyboard</option>
+  </optgroup>
+  <optgroup label="Mice (for jiggler use)">
+    <option value="mx_master">Logitech MX Master 3</option>
+    <option value="magic_mouse">Apple Magic Mouse 2</option>
+    <option value="g502">Logitech G502 Gaming Mouse</option>
+  </optgroup>
+  <optgroup label="Other">
+    <option value="custom">Custom</option>
+  </optgroup>
+</select>
+<p class="hint" id="hidPresetHint"></p>
+
+<div class="card" style="margin-top:0.6em;">
+  <label for="hidVid">Vendor ID (hex, 4 digits)</label>
+  <input type="text" id="hidVid" maxlength="4" placeholder="e.g. 046D" style="font-family:monospace;">
+
+  <label for="hidPid" style="margin-top:0.6em;">Product ID (hex, 4 digits)</label>
+  <input type="text" id="hidPid" maxlength="4" placeholder="e.g. B342" style="font-family:monospace;">
+
+  <label for="hidMfr" style="margin-top:0.6em;">Manufacturer string</label>
+  <input type="text" id="hidMfr" maxlength="63" placeholder="e.g. Logitech">
+
+  <label for="hidProd" style="margin-top:0.6em;">Product string</label>
+  <input type="text" id="hidProd" maxlength="63" placeholder="e.g. K380 Multi-Device Keyboard">
+</div>
+
+<button id="hidSaveBtn">Save &amp; Reboot</button>
+<p class="status" id="hidStatus"></p>
+</section>
+
+<h2>Device &amp; firmware</h2>
+<p class="hint">Live stats for the connected dongle. Free heap below ~80 kB may cause instability; if you see it drop that low, reboot.</p>
+<p class="status" id="deviceInfoFull">Loading...</p>
+<button id="rebootBtn">Reboot device</button>
+<p class="hint" style="margin-top:0.3em;">Performs a clean software reboot. Settings and snippets are preserved. The Wi-Fi AP will disappear for ~8 seconds while it restarts.</p>
+<p class="status" id="rebootStatus"></p>
+
+<h3 style="margin-top:1.4em;border-top:1px solid #ddd;padding-top:0.8em;">Update UI (no reboot needed)</h3>
+<p class="hint">Upload a new <code>index.html</code> to the device filesystem. The page reloads immediately — no firmware reflash required. Useful when iterating on the UI.</p>
+<form id="uiUploadForm">
+  <label for="uiFile">index.html file</label>
+  <input type="file" id="uiFile" accept=".html" style="padding:0.3em 0;">
+  <button type="submit" id="uiUploadBtn" style="margin-top:0.4em;">Upload UI</button>
+</form>
+<p class="status" id="uiUploadStatus"></p>
+
+<h3 style="margin-top:1.4em;border-top:1px solid #ddd;padding-top:0.8em;">Update firmware (OTA)</h3>
+<p class="hint">Build in VS Code (PlatformIO → Build), then pick <code>.pio/build/esp32s3-usb/firmware.bin</code>. The dongle writes to the standby OTA slot and reboots — your previous firmware is kept. The page reloads automatically after ~12 seconds.</p>
+<form id="otaForm">
+  <label for="otaFile">Firmware binary (.bin)</label>
+  <input type="file" id="otaFile" accept=".bin" style="padding:0.3em 0;">
+  <button type="submit" id="otaBtn" style="margin-top:0.4em;">Upload &amp; reboot</button>
+</form>
+<div id="otaProgressWrap" style="display:none;margin-top:0.6em;">
+  <div id="otaBar" style="height:1.2em;width:0%;background:#007bff;border-radius:0.25em;transition:width 0.3s;"></div>
+</div>
+<p class="status" id="otaStatus"></p>
+
+<script>
+const curEl = document.getElementById('cur');
+const nameEl = document.getElementById('name');
+const textEl = document.getElementById('text');
+const modeEl = document.getElementById('mode');
+const statsEl = document.getElementById('stats');
+const pasteBtn = document.getElementById('pasteBtn');
+const cancelBtn = document.getElementById('cancelBtn');
+const progressWrap = document.getElementById('progressWrap');
+const progressBar = document.getElementById('progressBar');
+const statusEl = document.getElementById('pasteStatus');
+
+const WPM = { max: 600, fast: 120, human: 70 };
+let ws = null;
+let ackResolve = null;
+let running = false;
+let supportedChars = null;
+const charWarnEl = document.getElementById('charWarn');
+
+// ---- Jiggler refs ----------------------------------------------------------
+const jiggleEnabled      = document.getElementById('jiggleEnabled');
+const jiggleInterval     = document.getElementById('jiggleInterval');
+const jiggleMeanInterval = document.getElementById('jiggleMeanInterval');
+const jiggleDistance     = document.getElementById('jiggleDistance');
+const jiggleDriftRadius  = document.getElementById('jiggleDriftRadius');
+const jiggleJitter       = document.getElementById('jiggleJitter');
+const jigglePattern      = document.getElementById('jigglePattern');
+const jiggleRandomize    = document.getElementById('jiggleRandomize');
+const jiggleSaveBtn      = document.getElementById('jiggleSaveBtn');
+const jiggleStatus       = document.getElementById('jiggleStatus');
+
+function updateJiggleMode() {
+  const natural = jigglePattern.value === 'natural';
+  document.getElementById('naturalControls').style.display  = natural ? '' : 'none';
+  document.getElementById('geometricControls').style.display = natural ? 'none' : '';
+}
+jigglePattern.onchange = updateJiggleMode;
+
+// ---- Char warn -------------------------------------------------------------
+function checkUnsupportedChars() {
+  if (!supportedChars) return;
+  const text = textEl.value;
+  let bad = 0;
+  const seen = new Set();
+  for (const ch of text) {
+    if (ch === '\n' || ch === '\r' || ch === '\t') continue;
+    if (!supportedChars.has(ch) && !seen.has(ch)) { bad++; seen.add(ch); }
+  }
+  if (bad > 0) {
+    charWarnEl.textContent = '⚠️ ' + bad + ' character' + (bad > 1 ? 's' : '') +
+      ' not in the ' + (layoutEl ? layoutEl.value : '') +
+      ' layout — they will be approximated or skipped.';
+    charWarnEl.style.display = 'block';
+  } else {
+    charWarnEl.style.display = 'none';
+  }
+}
+
+// ---- Snippet store ---------------------------------------------------------
+const snippetListEl = document.getElementById('snippetList');
+const saveSnippetBtn = document.getElementById('saveSnippetBtn');
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function loadSnippets() {
+  try {
+    const list = await fetch('/api/snippets').then(r => r.json());
+    if (!list.length) { snippetListEl.innerHTML = '<em>No saved snippets.</em>'; return; }
+    snippetListEl.innerHTML = list.map(s =>
+      `<div style="margin:0.6em 0;padding:0.5em;border:1px solid #e0e0e0;border-radius:4px;">
+        <div style="display:flex;gap:0.4em;align-items:center;">
+          <strong style="flex:1;">${escHtml(s.title)}</strong>
+          <small style="color:#888;">${s.chars} chars</small>
+          <button onclick="typeSnippet(${s.id},this)">Type</button>
+          <button onclick="editSnippet(${s.id})">Edit</button>
+          <button onclick="deleteSnippet(${s.id})">Delete</button>
+        </div>
+        ${s.preview ? `<div style="margin-top:0.3em;font-size:0.82em;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(s.preview)}</div>` : ''}
+      </div>`
+    ).join('');
+  } catch(e) { snippetListEl.innerHTML = '<em>Failed to load snippets.</em>'; }
+}
+
+async function typeSnippet(id, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Typing…';
+  try {
+    await fetch('/api/snippets/type', { method: 'POST', body: new URLSearchParams({id}) });
+    btn.textContent = 'Sent ✓';
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+  } catch(e) { btn.textContent = orig; btn.disabled = false; }
+}
+
+async function deleteSnippet(id) {
+  if (!confirm('Delete this snippet?')) return;
+  await fetch('/api/snippets?id=' + id, { method: 'DELETE' });
+  loadSnippets();
+}
+
+let _editId = -1;
+const snippetEditArea = document.getElementById('snippetEditArea');
+const editTitleEl = document.getElementById('editTitle');
+const editTextEl  = document.getElementById('editText');
+
+async function editSnippet(id) {
+  try {
+    const s = await fetch('/api/snippets?id=' + id).then(r => r.json());
+    editTitleEl.value = s.title;
+    editTextEl.value  = s.text;
+    _editId = id;
+    snippetEditArea.style.display = 'block';
+    editTextEl.focus();
+  } catch(e) { alert('Could not load snippet.'); }
+}
+
+document.getElementById('saveEditBtn').onclick = async () => {
+  const title = editTitleEl.value.trim();
+  const text  = editTextEl.value;
+  if (!title) return;
+  await fetch('/api/snippets', { method: 'POST', body: new URLSearchParams({ id: _editId, title, text }) });
+  snippetEditArea.style.display = 'none';
+  _editId = -1;
+  loadSnippets();
+};
+
+document.getElementById('cancelEditBtn').onclick = () => {
+  snippetEditArea.style.display = 'none';
+  _editId = -1;
+};
+
+saveSnippetBtn.onclick = async () => {
+  const text = textEl.value.trim();
+  if (!text) { alert('Type or paste some text first.'); return; }
+  const title = prompt('Snippet name:', 'Snippet ' + Date.now());
+  if (!title) return;
+  const list = await fetch('/api/snippets').then(r => r.json());
+  const usedIds = new Set(list.map(s => s.id));
+  let slot = -1;
+  for (let i = 0; i < 8; i++) { if (!usedIds.has(i)) { slot = i; break; } }
+  if (slot < 0) { alert('All 8 snippet slots are full. Delete one first.'); return; }
+  await fetch('/api/snippets', { method: 'POST', body: new URLSearchParams({ id: slot, title, text }) });
+  loadSnippets();
+};
+
+// ---- Macro UI --------------------------------------------------------------
+const macroRunBtn    = document.getElementById('macroRunBtn');
+const macroCancelBtn = document.getElementById('macroCancelBtn');
+const macroStatusEl  = document.getElementById('macroStatus');
+const macroScriptEl  = document.getElementById('macroScript');
+
+macroRunBtn.onclick = async () => {
+  const script = macroScriptEl.value.trim();
+  if (!script) { macroStatusEl.textContent = 'Enter a script first.'; return; }
+  macroRunBtn.disabled = true;
+  macroCancelBtn.disabled = false;
+  macroStatusEl.textContent = 'Running on device…';
+  try {
+    const r = await fetch('/api/macro/run', {
+      method: 'POST',
+      body: new URLSearchParams({ script })
+    });
+    const j = await r.json();
+    if (!j.ok) macroStatusEl.textContent = 'Error: ' + (j.error || 'unknown');
+  } catch(e) {
+    macroStatusEl.textContent = 'Request failed: ' + e;
+  }
+  // Re-enable after 5 s — we have no completion signal yet
+  setTimeout(() => {
+    macroRunBtn.disabled = false;
+    macroCancelBtn.disabled = true;
+    if (macroStatusEl.textContent.startsWith('Running'))
+      macroStatusEl.textContent = 'Done (or use Cancel if still running).';
+  }, 5000);
+};
+
+macroCancelBtn.onclick = async () => {
+  try { await fetch('/api/macro/cancel', { method: 'POST' }); } catch(_) {}
+  macroStatusEl.textContent = 'Cancelled.';
+  macroRunBtn.disabled = false;
+  macroCancelBtn.disabled = true;
+};
+
+// ---- Human simulation ------------------------------------------------------
+const simStatusEl    = document.getElementById('simStatus');
+const simEnabledEl   = document.getElementById('simEnabled');
+const simPauseEl     = document.getElementById('simPause');
+const simWordsEl     = document.getElementById('simWords');
+const simCharDelayEl = document.getElementById('simCharDelay');
+const simSaveBtn     = document.getElementById('simSaveBtn');
+
+function updateSimCharDelayLabel() {
+  const ms = parseInt(simCharDelayEl.value, 10) || 130;
+  document.getElementById('simCharDelayVal').textContent = ms;
+  document.getElementById('simCharDelayWpm').textContent = Math.round(12000 / ms);
+}
+simCharDelayEl.oninput = updateSimCharDelayLabel;
+
+async function loadSimConfig() {
+  try {
+    const j = await fetch('/api/sim').then(r => r.json());
+    simEnabledEl.checked = j.enabled;
+    simPauseEl.value = Math.round(j.pause_ms / 1000);
+    simWordsEl.value = j.words_per_burst;
+    simCharDelayEl.value = j.char_delay_ms || 130;
+    updateSimCharDelayLabel();
+    simStatusEl.textContent = j.enabled
+      ? 'Active — typing random words and erasing them to simulate activity.'
+      : 'Inactive.';
+  } catch(e) { simStatusEl.textContent = 'Failed to load.'; }
+}
+
+simSaveBtn.onclick = async () => {
+  const params = new URLSearchParams({
+    enabled:         simEnabledEl.checked ? '1' : '0',
+    pause_ms:        String(Math.max(5, parseInt(simPauseEl.value,10) || 18) * 1000),
+    words_per_burst: String(Math.max(2, Math.min(20, parseInt(simWordsEl.value,10) || 8))),
+    char_delay_ms:   String(Math.max(40, Math.min(300, parseInt(simCharDelayEl.value,10) || 130))),
+  });
+  await fetch('/api/sim', { method: 'POST', body: params });
+  await loadSimConfig();
+};
+
+// ---- Supported chars -------------------------------------------------------
+function loadSupportedChars() {
+  fetch('/api/chars')
+    .then(r => r.json())
+    .then(j => { supportedChars = new Set(j.chars); checkUnsupportedChars(); })
+    .catch(() => {});
+}
+
+// ---- Paste stats / flow ----------------------------------------------------
+function updateStats() {
+  const n = textEl.value.length;
+  const wpm = WPM[modeEl.value] || 120;
+  let timeText;
+  if (modeEl.value === 'max') {
+    timeText = 'as fast as the host accepts';
+  } else {
+    const sec = Math.round(n * 60 / (wpm * 5));
+    timeText = sec < 60 ? sec + ' s' : Math.round(sec / 60) + ' min ' + (sec % 60) + ' s';
+  }
+  statsEl.textContent = n + ' chars — estimated time: ' + timeText;
+  checkUnsupportedChars();
+}
+
+function setUiLocked(locked) {
+  pasteBtn.disabled = locked;
+  cancelBtn.disabled = !locked;
+  textEl.disabled = locked;
+  modeEl.disabled = locked;
+  if (locked) progressWrap.style.display = 'block';
+}
+
+function updateStatus(state, typed, total, pending, wpm, skipped) {
+  typed   = typed   | 0;
+  total   = total   | 0;
+  pending = pending | 0;
+  wpm     = wpm     | 0;
+  skipped = skipped | 0;
+
+  let statusText = state;
+  if (state === 'typing') {
+    if (total > 0) {
+      const pct = Math.min(100, Math.round(typed / total * 100));
+      const etaSec = wpm > 0 ? Math.round((total - typed) * 60 / (wpm * 5)) : 0;
+      const etaStr = etaSec < 60 ? etaSec + ' s left' : Math.round(etaSec / 60) + ' min left';
+      statusText = pct + '% · ' + etaStr + ' · ' + wpm + ' WPM';
+      progressBar.style.width = pct + '%';
+      progressBar.style.opacity = '1';
+    } else {
+      statusText = 'typing ' + typed + ' chars · ' + wpm + ' WPM';
+      progressBar.style.width = '100%';
+      progressBar.style.opacity = '0.35';
+    }
+  } else if (state === 'done') {
+    statusText = 'Done — typed ' + typed + ' chars';
+  } else if (state === 'cancelled') {
+    statusText = 'Cancelled after ' + typed + ' chars';
+  } else if (state === 'error') {
+    statusText = 'Error after ' + typed + ' chars';
+  }
+  statusEl.textContent = statusText;
+
+  if (state === 'done' || state === 'cancelled' || state === 'error') {
+    if (skipped > 0) {
+      statusEl.textContent += ' — ' + skipped + ' character' + (skipped > 1 ? 's' : '') +
+        ' had no keymap entry and were approximated or skipped.';
+    }
+    running = false;
+    setUiLocked(false);
+    progressBar.style.width = '0%';
+    progressBar.style.opacity = '1';
+  }
+}
+
+// ---- WebSocket -------------------------------------------------------------
+function connectWs() {
+  ws = new WebSocket('ws://' + location.host + '/ws');
+  ws.onopen = () => {
+    statusEl.textContent = 'Connected — pair the dongle with your computer, then paste.';
+    ws.send(JSON.stringify({t:'jiggle_get'}));
+  };
+  ws.onclose = () => {
+    statusEl.textContent = 'Disconnected. Reconnecting...';
+    setTimeout(connectWs, 2000);
+  };
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch(e) { return; }
+    if (msg.t === 'status') {
+      updateStatus(msg.state, msg.typed, msg.total, msg.pending, msg.wpm, msg.skipped || 0);
+    } else if (msg.t === 'ack') {
+      if (ackResolve) { ackResolve(); ackResolve = null; }
+    } else if (msg.t === 'jiggle_state') {
+      applyJigglerState(msg);
+    } else if (msg.t === 'jiggle_ack') {
+      ws.send(JSON.stringify({t:'jiggle_get'}));
+    }
+  };
+}
+connectWs();
+
+function waitAck() {
+  return new Promise(resolve => { ackResolve = resolve; });
+}
+
+async function doPaste() {
+  const text = textEl.value;
+  if (!text) return;
+  const mode = modeEl.value;
+  const chunkSize = 512;
+  running = true;
+  setUiLocked(true);
+  ws.send(JSON.stringify({t:'start', total:text.length, mode:mode}));
+  for (let off = 0; off < text.length; off += chunkSize) {
+    if (!running) break;
+    const chunk = text.slice(off, off + chunkSize);
+    ws.send(JSON.stringify({t:'chunk', text:chunk}));
+    await waitAck();
+  }
+  if (running) statusEl.textContent = 'Finishing...';
+}
+
+pasteBtn.onclick = () => doPaste().catch(e => { statusEl.textContent = 'Error: ' + e; setUiLocked(false); });
+cancelBtn.onclick = () => {
+  ws.send(JSON.stringify({t:'cancel'}));
+  running = false;
+  if (ackResolve) { ackResolve(); ackResolve = null; }
+};
+textEl.oninput = updateStats;
+modeEl.onchange = updateStats;
+
+// ---- BLE config ------------------------------------------------------------
+fetch('/api/config')
+  .then(r => r.json())
+  .then(j => { curEl.textContent = j.name || '(default)'; nameEl.value = j.name || ''; })
+  .catch(() => {});
+
+document.getElementById('cfgform').onsubmit = async (e) => {
+  e.preventDefault();
+  const name = nameEl.value.trim();
+  if (!name || name.length > 31) return;
+  await fetch('/api/config', { method: 'POST', body: 'name=' + encodeURIComponent(name) });
+  await fetch('/api/reboot', { method: 'POST' });
+};
+
+// ---- Layout ----------------------------------------------------------------
+const layoutEl = document.getElementById('layout');
+const layoutCurEl = document.getElementById('layoutCur');
+
+fetch('/api/layout')
+  .then(r => r.json())
+  .then(j => { layoutEl.value = (j.layout || 'US').toUpperCase(); layoutCurEl.textContent = layoutEl.value; })
+  .catch(() => {});
+
+document.getElementById('layoutForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const layout = layoutEl.value.toUpperCase();
+  await fetch('/api/layout', { method: 'POST', body: 'layout=' + encodeURIComponent(layout) });
+  layoutCurEl.textContent = layout;
+  loadSupportedChars();
+};
+
+// ---- Jiggler ---------------------------------------------------------------
+function applyJigglerState(j) {
+  jiggleEnabled.checked = j.enabled;
+  jigglePattern.value   = j.pattern || 'natural';
+  jiggleMeanInterval.value = Math.max(5, Math.round((j.interval_ms || 30000) / 1000));
+  jiggleDriftRadius.value  = j.ou_max_radius || 5;
+  jiggleJitter.value       = j.ou_jitter !== undefined ? j.ou_jitter : 50;
+  document.getElementById('jiggleDriftRadiusVal').textContent = jiggleDriftRadius.value;
+  document.getElementById('jiggleJitterVal').textContent      = jiggleJitter.value;
+  jiggleInterval.value  = Math.max(1, Math.round((j.interval_ms || 30000) / 1000));
+  jiggleDistance.value  = j.distance || 2;
+  document.getElementById('jiggleDistVal').textContent = j.distance || 2;
+  jiggleRandomize.checked = j.randomize || false;
+  const hasMouse = j.has_mouse;
+  jiggleStatus.textContent = hasMouse ? 'Mouse HID available.' : 'Mouse HID not available on this backend.';
+  jiggleEnabled.disabled = !hasMouse;
+  jiggleSaveBtn.disabled = !hasMouse;
+  updateJiggleMode();
+}
+
+async function loadJigglerConfig() {
+  try { applyJigglerState(await fetch('/api/jiggler').then(r => r.json())); }
+  catch(e) { jiggleStatus.textContent = 'Failed to load jiggler config.'; }
+}
+
+jiggleSaveBtn.onclick = async () => {
+  const natural = jigglePattern.value === 'natural';
+  const params = new URLSearchParams();
+  params.append('enabled', jiggleEnabled.checked ? '1' : '0');
+  params.append('pattern', jigglePattern.value);
+  if (natural) {
+    params.append('interval_ms',    String(Math.max(5,  parseInt(jiggleMeanInterval.value,10)||30) * 1000));
+    params.append('ou_max_radius',  String(Math.max(1,   Math.min(20,  parseInt(jiggleDriftRadius.value,10)||5))));
+    params.append('ou_jitter',      String(Math.max(0,   Math.min(100, parseInt(jiggleJitter.value,10)||50))));
+  } else {
+    params.append('interval_ms', String(Math.max(1, parseInt(jiggleInterval.value,10)||30) * 1000));
+    params.append('distance',    String(Math.max(1, Math.min(50, parseInt(jiggleDistance.value,10)||2))));
+    params.append('randomize',   jiggleRandomize.checked ? '1' : '0');
+  }
+  try {
+    await fetch('/api/jiggler', { method: 'POST', body: params });
+    jiggleStatus.textContent = 'Saved.';
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({t:'jiggle_get'}));
+  } catch(e) { jiggleStatus.textContent = 'Save failed: ' + e; }
+};
+
+document.getElementById('jiggleDistance').oninput    = (e) => { document.getElementById('jiggleDistVal').textContent       = e.target.value; };
+document.getElementById('jiggleDriftRadius').oninput = (e) => { document.getElementById('jiggleDriftRadiusVal').textContent = e.target.value; };
+document.getElementById('jiggleJitter').oninput      = (e) => { document.getElementById('jiggleJitterVal').textContent      = e.target.value; };
+
+// ---- Device info -----------------------------------------------------------
+function fmtUptime(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
+}
+async function loadDeviceInfo() {
+  try {
+    const j = await fetch('/api/info').then(r => r.json());
+    const heap = Math.round(j.free_heap/1024), minH = Math.round(j.min_free_heap/1024);
+    const bar = `${j.backend.toUpperCase()} · v${j.firmware_version} · up ${fmtUptime(j.uptime_ms)} · heap ${heap} kB (min ${minH} kB)`;
+    document.getElementById('deviceInfoBar').textContent  = bar;
+    document.getElementById('deviceInfoFull').textContent = bar;
+  } catch(e) { document.getElementById('deviceInfoFull').textContent = 'Device info unavailable.'; }
+}
+loadDeviceInfo();
+setInterval(loadDeviceInfo, 15000);
+
+// ---- UI file upload (LittleFS) ---------------------------------------------
+document.getElementById('uiUploadForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const file = document.getElementById('uiFile').files[0];
+  const statusEl2 = document.getElementById('uiUploadStatus');
+  if (!file) { statusEl2.textContent = 'Select an index.html file first.'; return; }
+  document.getElementById('uiUploadBtn').disabled = true;
+  statusEl2.textContent = 'Uploading...';
+  const fd = new FormData();
+  fd.append('file', file, 'index.html');
+  try {
+    const r = await fetch('/api/fs/upload', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.ok) {
+      statusEl2.textContent = 'Uploaded! Reloading...';
+      setTimeout(() => location.reload(), 1200);
+    } else {
+      statusEl2.textContent = 'Error: ' + (j.error || 'unknown');
+    }
+  } catch(e) {
+    statusEl2.textContent = 'Upload failed: ' + e;
+  }
+  document.getElementById('uiUploadBtn').disabled = false;
+};
+
+// ---- OTA upload ------------------------------------------------------------
+const otaFileEl   = document.getElementById('otaFile');
+const otaBtnEl    = document.getElementById('otaBtn');
+const otaProgressWrap = document.getElementById('otaProgressWrap');
+const otaBarEl    = document.getElementById('otaBar');
+const otaStatusEl = document.getElementById('otaStatus');
+
+document.getElementById('otaForm').onsubmit = (e) => {
+  e.preventDefault();
+  const file = otaFileEl.files[0];
+  if (!file) { otaStatusEl.textContent = 'Select a firmware .bin file first.'; return; }
+  const fd = new FormData();
+  fd.append('file', file, 'firmware.bin');
+  const xhr = new XMLHttpRequest();
+  otaBtnEl.disabled = true;
+  otaProgressWrap.style.display = 'block';
+  otaBarEl.style.width = '0%';
+  otaStatusEl.textContent = 'Uploading...';
+  xhr.upload.onprogress = (ev) => {
+    if (!ev.lengthComputable) return;
+    const pct = Math.round(ev.loaded / ev.total * 100);
+    otaBarEl.style.width = pct + '%';
+    otaStatusEl.textContent = `Uploading ${pct}% (${Math.round(ev.loaded/1024)} / ${Math.round(ev.total/1024)} kB)`;
+  };
+  function reloadCountdown(sec) {
+    const tick = () => {
+      otaStatusEl.textContent = `Upload complete — rebooting. Page reloads in ${sec} s...`;
+      if (sec-- > 0) setTimeout(tick, 1000); else location.reload();
+    };
+    tick();
+  }
+  xhr.onload = () => {
+    otaBtnEl.disabled = false;
+    if (xhr.status === 200) { otaBarEl.style.width = '100%'; reloadCountdown(12); }
+    else { otaStatusEl.textContent = `Upload failed (HTTP ${xhr.status}): ${xhr.responseText}`; }
+  };
+  xhr.onerror = () => {
+    otaBtnEl.disabled = false;
+    if (parseFloat(otaBarEl.style.width) >= 99) reloadCountdown(15);
+    else otaStatusEl.textContent = 'Connection lost — check serial to see if flash succeeded.';
+  };
+  xhr.open('POST', '/api/update');
+  xhr.send(fd);
+};
+
+// ---- Reboot ----------------------------------------------------------------
+document.getElementById('rebootBtn').onclick = async () => {
+  try { await fetch('/api/reboot', { method: 'POST' }); } catch(_) {}
+  let t = 8;
+  const tick = () => {
+    document.getElementById('rebootStatus').textContent = `Rebooting… page reloads in ${t} s`;
+    if (t-- > 0) setTimeout(tick, 1000); else location.reload();
+  };
+  tick();
+};
+
+// ---- HID Identity ----------------------------------------------------------
+const HID_PRESETS = {
+  generic_kb:  { vid: '303A', pid: '1001', mfr: 'Espressif',   prod: 'USB HID Keyboard',              hint: 'Default Espressif identity. Safe and neutral.' },
+  k380:        { vid: '046D', pid: 'B342', mfr: 'Logitech',    prod: 'K380 Multi-Device Keyboard',     hint: 'Logitech K380 — common wireless keyboard, widely trusted.' },
+  mx_keys:     { vid: '046D', pid: 'B35B', mfr: 'Logitech',    prod: 'MX Keys',                        hint: 'Logitech MX Keys — popular office keyboard.' },
+  magic_kb:    { vid: '05AC', pid: '0267', mfr: 'Apple Inc.',  prod: 'Magic Keyboard',                 hint: 'Apple Magic Keyboard (USB). Appears as Apple hardware to the host.' },
+  dell_kb216:  { vid: '413C', pid: '2113', mfr: 'Dell Inc.',   prod: 'Dell USB Keyboard',              hint: 'Dell KB216 — ubiquitous office keyboard.' },
+  mx_master:   { vid: '046D', pid: 'B023', mfr: 'Logitech',    prod: 'MX Master 3',                    hint: 'Logitech MX Master 3 mouse. Best for jiggler use — host expects only mouse input.' },
+  magic_mouse: { vid: '05AC', pid: '0269', mfr: 'Apple Inc.',  prod: 'Magic Mouse 2',                  hint: 'Apple Magic Mouse 2. Mouse-forward identity.' },
+  g502:        { vid: '046D', pid: 'C08B', mfr: 'Logitech',    prod: 'G502 HERO Gaming Mouse',         hint: 'Logitech G502 — gaming mouse, no keyboard expected by host.' },
+  custom:      { vid: null,   pid: null,   mfr: null,           prod: null,                             hint: 'Enter your own VID/PID and strings.' },
+};
+
+const hidVidEl    = document.getElementById('hidVid');
+const hidPidEl    = document.getElementById('hidPid');
+const hidMfrEl    = document.getElementById('hidMfr');
+const hidProdEl   = document.getElementById('hidProd');
+const hidPresetEl = document.getElementById('hidPreset');
+
+function applyHidPreset(key) {
+  const p = HID_PRESETS[key];
+  if (!p) return;
+  document.getElementById('hidPresetHint').textContent = p.hint || '';
+  if (p.vid !== null) {
+    hidVidEl.value  = p.vid;
+    hidPidEl.value  = p.pid;
+    hidMfrEl.value  = p.mfr;
+    hidProdEl.value = p.prod;
+  }
+}
+hidPresetEl.onchange = () => applyHidPreset(hidPresetEl.value);
+
+async function loadHidIdentity() {
+  try {
+    const j = await fetch('/api/hid_identity').then(r => r.json());
+    hidVidEl.value  = j.vid.toString(16).toUpperCase().padStart(4,'0');
+    hidPidEl.value  = j.pid.toString(16).toUpperCase().padStart(4,'0');
+    hidMfrEl.value  = j.manufacturer;
+    hidProdEl.value = j.product;
+    // Try to match a preset
+    const curr = `${hidVidEl.value}|${hidPidEl.value}|${hidMfrEl.value}|${hidProdEl.value}`;
+    let matched = 'custom';
+    for (const [k, v] of Object.entries(HID_PRESETS)) {
+      if (v.vid && `${v.vid}|${v.pid}|${v.mfr}|${v.prod}` === curr) { matched = k; break; }
+    }
+    hidPresetEl.value = matched;
+    applyHidPreset(matched);
+  } catch(e) {}
+}
+
+document.getElementById('hidSaveBtn').onclick = async () => {
+  const params = new URLSearchParams({
+    vid: hidVidEl.value.trim() || '303A',
+    pid: hidPidEl.value.trim() || '1001',
+    manufacturer: hidMfrEl.value.trim() || 'Espressif',
+    product: hidProdEl.value.trim() || 'USB HID Keyboard',
+  });
+  try {
+    await fetch('/api/hid_identity', { method: 'POST', body: params });
+    document.getElementById('hidStatus').textContent = 'Saved. Rebooting to apply new identity…';
+    await fetch('/api/reboot', { method: 'POST' }).catch(() => {});
+    setTimeout(() => location.reload(), 10000);
+  } catch(e) {
+    document.getElementById('hidStatus').textContent = 'Save failed: ' + e;
+  }
+};
+
+// ---- Status / USB section --------------------------------------------------
+fetch('/api/status')
+  .then(r => r.json())
+  .then(j => {
+    if (j.backend === 'usb') {
+      document.getElementById('bleSection').style.display = 'none';
+      document.getElementById('hidSection').style.display = '';
+      loadHidIdentity();
+    }
+  })
+  .catch(() => {});
+
+// ---- Init ------------------------------------------------------------------
+loadJigglerConfig();
+loadSupportedChars();
+loadSnippets();
+loadSimConfig();
+updateStats();
+// hidSection and bleSection are shown/hidden by the status fetch above
+</script>
+</body>
+</html>

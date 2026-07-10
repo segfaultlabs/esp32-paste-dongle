@@ -26,176 +26,159 @@ static bool ensure_nvs() {
     return true;
 }
 
-static const char* NAMESPACE = "paste_dongle";
-static const char* KEY_DEVICE_NAME = "device_name";
-static const char* KEY_AP_SSID = "ap_ssid";
-static const char* KEY_AP_PASS = "ap_pass";
-
-static const char* KEY_JIGGLER_ENABLED = "j_en";
+static const char* NAMESPACE            = "paste_dongle";
+static const char* KEY_DEVICE_NAME      = "device_name";
+static const char* KEY_AP_SSID          = "ap_ssid";
+static const char* KEY_AP_PASS          = "ap_pass";
+static const char* KEY_JIGGLER_ENABLED  = "j_en";
 static const char* KEY_JIGGLER_INTERVAL = "j_iv";
 static const char* KEY_JIGGLER_DISTANCE = "j_dist";
-static const char* KEY_JIGGLER_PATTERN = "j_pat";
+static const char* KEY_JIGGLER_PATTERN  = "j_pat";
 static const char* KEY_JIGGLER_RANDOMIZE = "j_rnd";
-static const char* KEY_LAYOUT = "layout";
+static const char* KEY_LAYOUT           = "layout";
+static const char* KEY_JIGGLER_OU_RADIUS = "j_ou_r";
+static const char* KEY_JIGGLER_OU_JITTER = "j_ou_j";
+static const char* KEY_USB_VID           = "usb_vid";
+static const char* KEY_USB_PID           = "usb_pid";
+static const char* KEY_USB_MFR           = "usb_mfr";
+static const char* KEY_USB_PROD          = "usb_prd";
+static const char* KEY_SIM_ENABLED      = "sim_en";
+static const char* KEY_SIM_PAUSE        = "sim_pause";
+static const char* KEY_SIM_WORDS        = "sim_words";
 
-static const char* DEFAULT_AP_SSID = "PasteDongle";
-static const char* DEFAULT_AP_PASS = "pastepaste";
-static const char* DEFAULT_JIGGLER_PATTERN = "random";
-static const char* DEFAULT_LAYOUT = "US";
+// Load everything in a single Preferences open so boot costs one NVS transaction.
+void Store::load_all() {
+    Preferences prefs;
+    if (!prefs.begin(NAMESPACE, true)) return;
+
+    if (prefs.isKey(KEY_DEVICE_NAME))
+        cache_.device_name = std::string(prefs.getString(KEY_DEVICE_NAME, "").c_str());
+    if (prefs.isKey(KEY_AP_SSID))
+        cache_.ap_ssid = std::string(prefs.getString(KEY_AP_SSID, cache_.ap_ssid.c_str()).c_str());
+    if (prefs.isKey(KEY_AP_PASS))
+        cache_.ap_password = std::string(prefs.getString(KEY_AP_PASS, cache_.ap_password.c_str()).c_str());
+
+    cache_.jiggler_enabled     = prefs.getBool(KEY_JIGGLER_ENABLED,   false);
+    cache_.jiggler_interval_ms = prefs.getUInt(KEY_JIGGLER_INTERVAL,  30000);
+    cache_.jiggler_distance    = static_cast<int8_t>(prefs.getInt(KEY_JIGGLER_DISTANCE, 2));
+    cache_.jiggler_pattern     = std::string(prefs.getString(KEY_JIGGLER_PATTERN, cache_.jiggler_pattern.c_str()).c_str());
+    cache_.jiggler_randomize   = prefs.getBool(KEY_JIGGLER_RANDOMIZE, false);
+    cache_.jiggler_ou_radius   = static_cast<uint8_t>(prefs.getUInt(KEY_JIGGLER_OU_RADIUS, 5));
+    cache_.jiggler_ou_jitter   = static_cast<uint8_t>(prefs.getUInt(KEY_JIGGLER_OU_JITTER, 50));
+    cache_.usb_vid             = prefs.getUInt(KEY_USB_VID, 0x303A);
+    cache_.usb_pid             = prefs.getUInt(KEY_USB_PID, 0x1001);
+    if (prefs.isKey(KEY_USB_MFR))
+        cache_.usb_manufacturer = std::string(prefs.getString(KEY_USB_MFR, "Espressif").c_str());
+    if (prefs.isKey(KEY_USB_PROD))
+        cache_.usb_product = std::string(prefs.getString(KEY_USB_PROD, "USB HID Keyboard").c_str());
+    cache_.layout              = std::string(prefs.getString(KEY_LAYOUT, cache_.layout.c_str()).c_str());
+    cache_.sim_enabled         = prefs.getBool(KEY_SIM_ENABLED,  false);
+    cache_.sim_pause_ms        = prefs.getUInt(KEY_SIM_PAUSE,    18000);
+    cache_.sim_words_burst     = static_cast<uint8_t>(prefs.getUInt(KEY_SIM_WORDS, 8));
+
+    prefs.end();
+}
 
 bool Store::begin() {
     if (begun_) return true;
-    begun_ = ensure_nvs();
-    return begun_;
+    if (!ensure_nvs()) return false;
+    load_all();
+    begun_ = true;
+    return true;
 }
 
 void Store::end() {
     begun_ = false;
 }
 
-std::string Store::get_device_name() {
-    if (!ensure_nvs()) return "";
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, false)) return "";
-    if (!prefs.isKey(KEY_DEVICE_NAME)) {
-        prefs.end();
-        return "";
-    }
-    String name = prefs.getString(KEY_DEVICE_NAME, "");
-    prefs.end();
-    return std::string(name.c_str());
-}
+// Helper: open NVS for writing, apply a lambda, close.
+#define NVS_WRITE(body)                                         \
+    do {                                                        \
+        if (!ensure_nvs()) return;                              \
+        Preferences prefs;                                      \
+        if (!prefs.begin(NAMESPACE, false)) return;            \
+        body;                                                   \
+        prefs.end();                                            \
+    } while (0)
 
-void Store::set_device_name(const std::string& name) {
-    if (!ensure_nvs()) return;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, false)) return;
-    if (name.empty()) {
-        prefs.remove(KEY_DEVICE_NAME);
-    } else {
-        prefs.putString(KEY_DEVICE_NAME, name.c_str());
-    }
-    prefs.end();
-}
-
-std::string Store::get_ap_ssid() {
-    if (!ensure_nvs()) return DEFAULT_AP_SSID;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, true)) return DEFAULT_AP_SSID;
-    String v = prefs.getString(KEY_AP_SSID, DEFAULT_AP_SSID);
-    prefs.end();
-    return std::string(v.c_str());
-}
-
-std::string Store::get_ap_password() {
-    if (!ensure_nvs()) return DEFAULT_AP_PASS;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, true)) return DEFAULT_AP_PASS;
-    String v = prefs.getString(KEY_AP_PASS, DEFAULT_AP_PASS);
-    prefs.end();
-    return std::string(v.c_str());
-}
-
-bool Store::get_jiggler_enabled() {
-    if (!ensure_nvs()) return false;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, true)) return false;
-    bool v = prefs.getBool(KEY_JIGGLER_ENABLED, false);
-    prefs.end();
-    return v;
+void Store::set_device_name(const std::string& v) {
+    cache_.device_name = v;
+    NVS_WRITE(
+        if (v.empty()) prefs.remove(KEY_DEVICE_NAME);
+        else           prefs.putString(KEY_DEVICE_NAME, v.c_str());
+    );
 }
 
 void Store::set_jiggler_enabled(bool v) {
-    if (!ensure_nvs()) return;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, false)) return;
-    prefs.putBool(KEY_JIGGLER_ENABLED, v);
-    prefs.end();
-}
-
-uint32_t Store::get_jiggler_interval_ms() {
-    if (!ensure_nvs()) return 30000;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, true)) return 30000;
-    uint32_t v = prefs.getUInt(KEY_JIGGLER_INTERVAL, 30000);
-    prefs.end();
-    return v;
+    cache_.jiggler_enabled = v;
+    NVS_WRITE(prefs.putBool(KEY_JIGGLER_ENABLED, v));
 }
 
 void Store::set_jiggler_interval_ms(uint32_t v) {
-    if (!ensure_nvs()) return;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, false)) return;
-    prefs.putUInt(KEY_JIGGLER_INTERVAL, v);
-    prefs.end();
-}
-
-int8_t Store::get_jiggler_distance() {
-    if (!ensure_nvs()) return 2;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, true)) return 2;
-    int v = prefs.getInt(KEY_JIGGLER_DISTANCE, 2);
-    prefs.end();
-    return static_cast<int8_t>(v);
+    cache_.jiggler_interval_ms = v;
+    NVS_WRITE(prefs.putUInt(KEY_JIGGLER_INTERVAL, v));
 }
 
 void Store::set_jiggler_distance(int8_t v) {
-    if (!ensure_nvs()) return;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, false)) return;
-    prefs.putInt(KEY_JIGGLER_DISTANCE, v);
-    prefs.end();
-}
-
-std::string Store::get_jiggler_pattern() {
-    if (!ensure_nvs()) return DEFAULT_JIGGLER_PATTERN;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, true)) return DEFAULT_JIGGLER_PATTERN;
-    String v = prefs.getString(KEY_JIGGLER_PATTERN, DEFAULT_JIGGLER_PATTERN);
-    prefs.end();
-    return std::string(v.c_str());
+    cache_.jiggler_distance = v;
+    NVS_WRITE(prefs.putInt(KEY_JIGGLER_DISTANCE, v));
 }
 
 void Store::set_jiggler_pattern(const std::string& v) {
-    if (!ensure_nvs()) return;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, false)) return;
-    prefs.putString(KEY_JIGGLER_PATTERN, v.c_str());
-    prefs.end();
-}
-
-bool Store::get_jiggler_randomize() {
-    if (!ensure_nvs()) return false;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, true)) return false;
-    bool v = prefs.getBool(KEY_JIGGLER_RANDOMIZE, false);
-    prefs.end();
-    return v;
+    cache_.jiggler_pattern = v;
+    NVS_WRITE(prefs.putString(KEY_JIGGLER_PATTERN, v.c_str()));
 }
 
 void Store::set_jiggler_randomize(bool v) {
-    if (!ensure_nvs()) return;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, false)) return;
-    prefs.putBool(KEY_JIGGLER_RANDOMIZE, v);
-    prefs.end();
-}
-
-std::string Store::get_layout() {
-    if (!ensure_nvs()) return DEFAULT_LAYOUT;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, true)) return DEFAULT_LAYOUT;
-    String v = prefs.getString(KEY_LAYOUT, DEFAULT_LAYOUT);
-    prefs.end();
-    return std::string(v.c_str());
+    cache_.jiggler_randomize = v;
+    NVS_WRITE(prefs.putBool(KEY_JIGGLER_RANDOMIZE, v));
 }
 
 void Store::set_layout(const std::string& v) {
-    if (!ensure_nvs()) return;
-    Preferences prefs;
-    if (!prefs.begin(NAMESPACE, false)) return;
-    prefs.putString(KEY_LAYOUT, v.c_str());
-    prefs.end();
+    cache_.layout = v;
+    NVS_WRITE(prefs.putString(KEY_LAYOUT, v.c_str()));
+}
+
+void Store::set_jiggler_ou_radius(uint8_t v) {
+    cache_.jiggler_ou_radius = v;
+    NVS_WRITE(prefs.putUInt(KEY_JIGGLER_OU_RADIUS, v));
+}
+
+void Store::set_jiggler_ou_jitter(uint8_t v) {
+    cache_.jiggler_ou_jitter = v;
+    NVS_WRITE(prefs.putUInt(KEY_JIGGLER_OU_JITTER, v));
+}
+
+void Store::set_usb_vid(uint32_t v) {
+    cache_.usb_vid = v;
+    NVS_WRITE(prefs.putUInt(KEY_USB_VID, v));
+}
+void Store::set_usb_pid(uint32_t v) {
+    cache_.usb_pid = v;
+    NVS_WRITE(prefs.putUInt(KEY_USB_PID, v));
+}
+void Store::set_usb_manufacturer(const std::string& v) {
+    cache_.usb_manufacturer = v;
+    NVS_WRITE(prefs.putString(KEY_USB_MFR, v.c_str()));
+}
+void Store::set_usb_product(const std::string& v) {
+    cache_.usb_product = v;
+    NVS_WRITE(prefs.putString(KEY_USB_PROD, v.c_str()));
+}
+
+void Store::set_sim_enabled(bool v) {
+    cache_.sim_enabled = v;
+    NVS_WRITE(prefs.putBool(KEY_SIM_ENABLED, v));
+}
+
+void Store::set_sim_pause_ms(uint32_t v) {
+    cache_.sim_pause_ms = v;
+    NVS_WRITE(prefs.putUInt(KEY_SIM_PAUSE, v));
+}
+
+void Store::set_sim_words_burst(uint8_t v) {
+    cache_.sim_words_burst = v;
+    NVS_WRITE(prefs.putUInt(KEY_SIM_WORDS, v));
 }
 
 } // namespace config

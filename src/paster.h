@@ -25,6 +25,7 @@ struct Status {
     int total_chars = -1;  // -1 if the client never told us the total.
     int pending = 0;       // Characters queued but not yet typed.
     int wpm = 0;
+    int skipped = 0;       // Code points with no keymap entry and no transliteration.
 };
 
 class Paster {
@@ -60,6 +61,7 @@ private:
 
     int chars_typed_ = 0;
     int total_chars_ = -1;
+    int skipped_ = 0;
     State state_ = State::IDLE;
     int next_time_ms_ = 0;
 

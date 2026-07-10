@@ -1,0 +1,18 @@
+# Custom partition table for 4 MB flash.
+# Two equal OTA app slots + LittleFS data partition.
+# Apply with a one-time serial flash (cannot be changed over OTA):
+#
+#   esptool.py --chip esp32s3 --port <PORT> --baud 921600 write_flash \
+#     0x0     .pio/build/esp32s3-usb/bootloader.bin \
+#     0x8000  .pio/build/esp32s3-usb/partitions.bin \
+#     0x10000 .pio/build/esp32s3-usb/firmware.bin
+#
+# After that, all future updates can be done via OTA; failed boots
+# auto-roll back to the previous slot.
+#
+# Name,      Type, SubType,  Offset,    Size
+nvs,         data, nvs,      0x9000,    0x5000,
+otadata,     data, ota,      0xE000,    0x2000,
+app0,        app,  ota_0,    0x10000,   0x160000,
+app1,        app,  ota_1,    0x170000,  0x160000,
+littlefs,    data, spiffs,   0x2D0000,  0x130000,

@@ -1,8 +1,10 @@
 #include "typing_engine.h"
 
 #include <cstdlib>
-#include <ctime>
 #include <algorithm>
+#ifdef ARDUINO
+#include <Arduino.h>
+#endif
 
 namespace typing {
 
@@ -36,9 +38,7 @@ Config preset(Mode mode) {
     return cfg;
 }
 
-Engine::Engine(Config cfg) : cfg_(std::move(cfg)) {
-    std::srand(static_cast<unsigned>(std::time(nullptr)));
-}
+Engine::Engine(Config cfg) : cfg_(std::move(cfg)) {}
 
 void Engine::set_config(const Config& cfg) {
     cfg_ = cfg;
@@ -52,7 +52,11 @@ void Engine::reset() {
 
 int Engine::now_ms() const {
     if (cfg_.clock_ms) return cfg_.clock_ms();
-    return static_cast<int>(std::time(nullptr) * 1000);
+#ifdef ARDUINO
+    return static_cast<int>(millis());
+#else
+    return 0;
+#endif
 }
 
 int Engine::wpm() const {

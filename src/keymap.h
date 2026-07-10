@@ -18,7 +18,7 @@ struct Report {
 };
 
 // Look up the HID report for a character in a given layout.
-// Supported layouts: "US", "DVORAK".
+// Supported layouts: "US", "UK", "DVORAK".
 Report lookup(char ch, const std::string& layout = "US");
 
 // Convenience: SHIFT modifier bit.
@@ -29,5 +29,9 @@ std::vector<std::string> layouts();
 
 // Check whether a layout name is supported.
 bool is_supported(const std::string& layout);
+
+// Return every character that can be typed in the given layout.
+// Useful for pre-flight checks in the web UI.
+std::string supported_chars(const std::string& layout);
 
 } // namespace keymap

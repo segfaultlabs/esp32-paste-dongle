@@ -1,4 +1,5 @@
 #include "paster.h"
+#include "transliterate.h"
 
 #include <algorithm>
 
@@ -22,6 +23,7 @@ void Paster::start(int total_chars) {
     buffer_.clear();
     read_pos_ = 0;
     chars_typed_ = 0;
+    skipped_ = 0;
     total_chars_ = total_chars;
     state_ = State::TYPING;
     engine_.reset();
@@ -81,6 +83,7 @@ Status Paster::status() const {
     s.total_chars = total_chars_;
     s.pending = pending();
     s.wpm = engine_.wpm();
+    s.skipped = skipped_;
     return s;
 }
 
@@ -97,9 +100,27 @@ int Paster::now_ms() const {
 
 void Paster::send_one() {
     if (pending() == 0) return;
-    char ch = buffer_[read_pos_++];
-    backend_->send_char(ch);
-    ++chars_typed_;
+
+    // Decode one Unicode code point from the UTF-8 buffer.
+    uint32_t cp = transliterate::decode_utf8(buffer_.c_str(), buffer_.size(), read_pos_);
+
+    if (cp < 0x80) {
+        // Plain ASCII — send directly.
+        backend_->send_char(static_cast<char>(cp));
+        ++chars_typed_;
+    } else {
+        // Non-ASCII: try the transliteration table first.
+        const char* approx = transliterate::ascii_for(cp);
+        if (approx) {
+            for (const char* p = approx; *p; ++p) {
+                backend_->send_char(*p);
+            }
+            ++chars_typed_; // count as one user-visible character consumed
+        } else {
+            ++skipped_;
+        }
+    }
+
     if (read_pos_ >= buffer_.size()) {
         buffer_.clear();
         read_pos_ = 0;
