@@ -6,3 +6,12 @@
 *.elf
 *.map
 .DS_Store
+
+# Compiled host test binaries
+test/test_keymap
+test/test_macro_parser
+test/test_macro_runner
+test/test_paster
+test/test_typing_engine
+test/test_human_sim
+test/test_transliterate
