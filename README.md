@@ -1,77 +1,140 @@
 # ESP32 Paste Dongle
 
-Paste text from your phone into any computer using an ESP32 as a keyboard proxy.
+Plug an ESP32-S3 into a computer's USB port. Join its Wi-Fi AP from your phone. Open the web UI, paste any text, hit **Type it** — the dongle types it into whatever window is focused on the computer.
 
-Works with two hardware modes:
-- **USB HID mode** — ESP32-S3 plugs into the computer's USB port and acts as a wired keyboard.
-- **BLE HID mode** — Classic ESP32 pairs with the computer over Bluetooth and acts as a wireless keyboard.
+No app, no cloud, no drivers, no network access required on the host PC.
+
+---
 
 ## What It Does
-- Connect your phone to the ESP32's WiFi access point.
-- Open the built-in web page, paste your text, and hit **Type it**.
-- The ESP32 sends the text as keystrokes to the computer (via USB or Bluetooth, depending on firmware).
 
-No app install, no cloud, no e-mail, no network required on the host PC.
+- **Paste engine** — streams text from phone to host in 512-byte chunks with real backpressure. Large pastes (tested to 100 kB+) work reliably.
+- **Speed modes** — Max Speed, Fast Typist (~120 WPM), Human/Careful (~70 WPM) with per-keystroke jitter, burst pauses, and optional typo simulation.
+- **Non-ASCII fallback** — UTF-8 aware. Accented Latin, smart quotes, em dashes, `©`, `€`, `™` and 70+ other characters are automatically approximated to ASCII equivalents. Unknown characters are counted and reported after paste.
+- **Snippets** — 8 NVS-backed text slots. Save, edit, preview, and type with one tap. Survive reboots.
+- **Macros** — DuckyScript-like scripting: `STRING`, `DELAY`, `ENTER`, `TAB`, `F1–F12`, arrow keys, `MOD_KEY CTRL c`, etc. Runs on device; targets focused window.
+- **Mouse jiggler** — keeps cursor alive to prevent screen lock and idle timeouts.
+  - **Natural mode** (default): Poisson-distributed intervals (no detectable heartbeat), Ornstein-Uhlenbeck cursor drift with Gaussian noise — designed to be undetectable by anti-idle software.
+  - Geometric modes (random/line/square/circle) retained for compatibility.
+- **Human simulation** — ambient "look busy" typing: types random word bursts and erases them in a loop. Only runs when paste/macro engine is idle.
+- **HID brand cloning** — device presents itself to the host as any USB keyboard or mouse. 8 presets: Logitech K380, MX Keys, MX Master 3, Apple Magic Keyboard, Magic Mouse 2, Dell KB216, G502, or fully custom VID/PID/strings. Takes effect on next reboot.
+- **OTA firmware updates** — upload `.bin` over Wi-Fi from the web UI or `scripts/ota_upload.py`. Dual-OTA partition table with automatic rollback after 60 s.
+- **LittleFS web UI** — the web interface lives in the device filesystem, not embedded in firmware. Update it with `python3 scripts/upload_ui.py` — no firmware reflash, no serial port, no bootloader mode.
+- **Keyboard layout** — US, UK, Dvorak. Wrong layout = wrong characters, so it checks and warns.
+- **Onboard RGB LED** — status indicator: white breath (booting), cyan pulse (waiting for USB host), mint (idle), fast mint pulse (typing), blue (jiggling), orange (macro), purple (simulation), red (error).
+- **mDNS** — reachable at `paste.local` in addition to `192.168.4.1`.
+- **Serial CLI** — `name`, `getname`, `type`, `jiggle on/off/cfg/status`, `reboot`, `help`.
 
-## Why
-Useful when you need to move large blocks of text (passwords, config files, scripts, log snippets) from your phone to a computer that can't or shouldn't receive them over the network.
+---
 
-## Key Features
-- **WiFi AP + web UI** — works with any phone browser.
-- **Chunked text paste** — phone streams text to the ESP32 so size is limited by phone memory, not ESP32 RAM.
-- **Speed modes with WPM readout** — Max Speed, Fast Typist (~120 WPM), and Human/Careful (~70 WPM).
-- **Anti-detection typing** — configurable jitter, burst pauses, typo simulation.
-- **Keyboard layout selector** — match the host OS layout (US, UK, Dvorak).
-- **Mouse jiggler** — basic patterns and interval randomization.
-- **OTA firmware updates** — update over Wi-Fi without unplugging the board.
-- **Serial CLI** — configure name, jiggler, and typing over USB serial.
+## Hardware
 
-## Documentation
-- [`docs/research.md`](docs/research.md) — existing projects and what we can reuse.
-- [`docs/decisions.md`](docs/decisions.md) — design decisions and rationale.
-- [`docs/hardware.md`](docs/hardware.md) — recommended boards and wiring.
-- [`docs/plan.md`](docs/plan.md) — full implementation plan (or see the approved Kimi plan file).
+**Recommended**: ESP32-S3-DevKitM-1 or DevKitC-1 (any variant with 4 MB flash and onboard RGB LED on GPIO 48).
 
-## What Works Now (v0.1)
+USB HID mode requires native USB-OTG (ESP32-S3). BLE HID mode works on classic ESP32 but is less tested.
 
-USB HID mode on the ESP32-S3 is functional and has been tested on real hardware:
+---
 
-- Wi-Fi AP with captive-style web UI
-- Chunked text paste from phone to host PC
-- Speed modes and anti-detection typing (jitter, bursts, typos)
-- Host layout selector (US / UK / Dvorak)
-- Basic mouse jiggler
-- OTA firmware updates over Wi-Fi
-- USB serial console for debugging and configuration
+## Quick Start
 
-See [`docs/lessons-learned.md`](docs/lessons-learned.md) for the bugs and hardware quirks discovered during bring-up.
+1. Flash the firmware (see below).
+2. Upload the web UI filesystem: `python3 scripts/upload_ui.py`
+3. Connect your phone to the **PasteDongle** Wi-Fi AP (password: `pastepaste`).
+4. Open `http://192.168.4.1` (or `http://paste.local`).
+5. Paste text, focus a window on the host, tap **Paste it**.
 
-## What's Still Missing / Needs Work
+---
 
-This is a working prototype, not a polished product. Honest gaps:
+## Build & Flash
 
-- **Web UI is bare-bones** — functional but ugly, with no live ETA, no progress indicators for huge pastes, and a reconnecting WebSocket that flickers.
-- **No support for non-ASCII text** — Korean, emoji, and most non-Latin scripts cannot be pasted. The dongle only knows USB HID keycodes for Latin layouts.
-- **Huge pastes are unreliable** — 6000+ characters can stall or fail; the backpressure between phone, WebSocket, and HID report rate has not been tuned.
-- **Mouse jiggler is obvious** — geometric patterns and fixed-distance jumps are easy to detect. It needs micro-movements, human-like jitter, and scheduling.
-- **No HID brand cloning** — the device advertises as a generic ESP32 HID device, which stands out next to real Logitech/Apple/Dell keyboards.
-- **BLE mode is unverified** — the codebase builds for BLE but recent testing focused on USB HID.
-- **No stored snippets or macros** — despite being in the original plan, these are not implemented.
-- **No human simulation typing** — only static paste and a basic jiggler exist; there is no "look busy" typing mode.
-- **Onboard LED is unused** — no status indication from the device itself.
-- **OTA uses multipart only** — plain `curl --data-binary` does not work because of how AsyncWebServer handles uploads.
-- **No security beyond the default AP password** — anyone on the `PasteDongle` network can control the device.
+```bash
+# First flash (sets up partition table — serial required once)
+pio run -e esp32s3-usb -t upload
 
-## Roadmap / TODO
+# Upload web UI to device filesystem
+python3 scripts/upload_ui.py
 
-- [ ] **HID brand cloning** — make the device advertise as different keyboard vendors (Logitech, Apple, etc.).
-- [ ] **Web UI polish** — fix layout/usability issues and add live status information.
-- [ ] **Typing ETA in web UI** — show estimated completion time based on speed mode and remaining characters.
-- [ ] **Huge paste support** — reliably paste 6000+ characters without stalling or dropping data.
-- [ ] **Ultimate mouse jiggler** — 1-pixel micro-movements, human-like jitter, work-hours schedule, smart pause during paste, and a real-time status panel.
-- [ ] **Human simulation typing** — automatically type random text or a chosen blurb, then backspace/delete it, repeating to simulate active work.
-- [ ] **Onboard LED control** — configure the ESP32-S3 onboard RGB/Neopixel LED from the web UI (status, brightness, patterns).
-- [ ] **Multi-language paste support** — handle non-ASCII input such as Korean, emoji, and other scripts.
+# All subsequent firmware updates over Wi-Fi
+python3 scripts/ota_upload.py .pio/build/esp32s3-usb/firmware.bin
+
+# All subsequent UI updates over Wi-Fi (no firmware reflash)
+python3 scripts/upload_ui.py
+```
+
+If you change the partition table, you must serial-flash all three images:
+```bash
+esptool.py --chip esp32s3 --port /dev/cu.usbmodem* --baud 921600 write_flash -z \
+  0x0     .pio/build/esp32s3-usb/bootloader.bin \
+  0x8000  .pio/build/esp32s3-usb/partitions.bin \
+  0xE000  /tmp/otadata_blank.bin \
+  0x10000 .pio/build/esp32s3-usb/firmware.bin \
+  0x170000 .pio/build/esp32s3-usb/firmware.bin
+```
+
+---
+
+## Architecture
+
+```
+src/
+  main.cpp            — setup(), loop(), WiFi AP, HTTP routes, WebSocket, OTA, serial CLI (~1800 lines, split planned)
+  paster.cpp/h        — UTF-8 aware paste engine with backpressure and transliteration
+  transliterate.cpp/h — UTF-8 decoder + 70-entry ASCII approximation table
+  typing_engine.cpp/h — WPM timing, jitter, burst pauses, typo simulation
+  keymap.cpp/h        — US / UK / Dvorak HID keycode lookup
+  macro_parser.cpp/h  — DuckyScript-like script parser
+  macro_runner.cpp/h  — tick-based macro executor with injectable clock
+  snippet_store.cpp/h — 8-slot NVS snippet store
+  mouse_jiggler.cpp/h — Poisson + Ornstein-Uhlenbeck jiggler + geometric modes
+  human_sim.cpp/h     — ambient typing simulation (PAUSING→TYPING→ERASING)
+  led_controller.cpp/h— NeoPixel status LED, 8 states
+  config_store.cpp/h  — NVS settings cache (all reads from RAM, one write per change)
+  hid/
+    ihid_backend.h    — abstract HID interface
+    usb_hid.cpp/h     — TinyUSB keyboard + mouse, VID/PID/name configurable
+    ble_hid.cpp/h     — ESP32 BLE keyboard
+
+data/
+  index.html          — web UI (served from LittleFS, updated without reflash)
+
+test/
+  test_*.cpp          — 355 host-side unit tests (no Arduino/FreeRTOS required)
+  Makefile
+
+scripts/
+  ota_upload.py       — Wi-Fi firmware upload
+  upload_ui.py        — Wi-Fi UI filesystem upload
+```
+
+**WebSocket protocol**: all messages are JSON with a `t` field for type. Firmware sends `status`, `ack`, `jiggle_state`. Client sends `start`, `chunk`, `cancel`, `jiggle_get`, `jiggle_cfg`, `ping`.
+
+**Partition table** (`partitions_4mb.csv`): NVS (20 kB) + OTA data (8 kB) + app0 (1.4 MB) + app1 (1.4 MB) + LittleFS (1.2 MB).
+
+---
+
+## Test Suite
+
+```bash
+cd test && make run
+# 355 tests — paster, typing engine, keymap, macro parser, macro runner, human sim, transliterate
+```
+
+All tests run on the host (macOS/Linux) with injected clocks and mock backends. No device required.
+
+---
+
+## What's Still To Do
+
+| # | Item | Notes |
+|---|---|---|
+| 1 | **Split `main.cpp`** | ~1800 lines — break into `wifi_ap`, `web_server`, `ws_handler`, `ota`, `serial_cli` modules. No behaviour change. |
+| 2 | **Macro completion signal** | Macro runner finishes silently. Needs a `{"t":"macro_done"}` WS event so the UI can re-enable the Run button accurately. |
+| 3 | **Version bump** | `"0.9.0"` hardcoded in `platformio.ini`. Should reflect real milestones. |
+| 4 | **BLE parity** | BLE backend builds but hasn't been tested since the USB refactor. Layout, jiggler, and snippets may need verification. |
+| 5 | **AP password first-boot generation** | Currently hardcoded `"pastepaste"`. Plan: random Diceware password on first boot, printed to serial + shown as QR code. Blocked until explicitly requested. |
+
+---
 
 ## License
-See individual source files. We plan to reuse MIT-licensed code from konkop and EvilDuck with clear attribution.
+
+MIT. See individual source files for attribution where third-party code is included.
