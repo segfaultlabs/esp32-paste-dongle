@@ -26,6 +26,17 @@ UsbHidBackend::UsbHidBackend()
 #endif
 {}
 
+// Mirror of the active USB identity, readable by usb_string_override.cpp.
+// Initialised to the default preset so the VERY FIRST USB enumeration (which
+// happens before setup() runs) already presents as the correct device rather
+// than as Espressif. set_identity() updates these from NVS in setup().
+extern "C" {
+    const char* g_usb_manufacturer = "Logitech";
+    const char* g_usb_product      = "K380 Multi-Device Keyboard";
+    uint16_t    g_usb_vid          = 0x046D;
+    uint16_t    g_usb_pid          = 0xB342;
+}
+
 void UsbHidBackend::set_identity(uint16_t vid, uint16_t pid,
                                   const std::string& manufacturer,
                                   const std::string& product) {
@@ -33,15 +44,19 @@ void UsbHidBackend::set_identity(uint16_t vid, uint16_t pid,
     pid_          = pid;
     manufacturer_ = manufacturer;
     product_      = product;
+    // Keep the mirrors in sync so the descriptor callbacks see fresh values.
+    g_usb_vid          = vid;
+    g_usb_pid          = pid;
+    g_usb_manufacturer = manufacturer_.c_str();
+    g_usb_product      = product_.c_str();
+    // Also push to the Arduino USB layer (effective on next USB.begin()).
+    USB.VID(vid);
+    USB.PID(pid);
+    USB.manufacturerName(manufacturer_.c_str());
+    USB.productName(product_.c_str());
 }
 
 bool UsbHidBackend::begin() {
-    // Apply USB device identity before starting the stack.
-    USB.VID(vid_);
-    USB.PID(pid_);
-    USB.manufacturerName(manufacturer_.c_str());
-    USB.productName(product_.c_str());
-
     // Begin registered HID interfaces. In HID_MOUSE_ONLY mode, only mouse is registered.
 #ifndef HID_MOUSE_ONLY
     keyboard_.begin();

@@ -65,12 +65,12 @@ void Store::load_all() {
     cache_.jiggler_randomize   = prefs.getBool(KEY_JIGGLER_RANDOMIZE, false);
     cache_.jiggler_ou_radius   = static_cast<uint8_t>(prefs.getUInt(KEY_JIGGLER_OU_RADIUS, 5));
     cache_.jiggler_ou_jitter   = static_cast<uint8_t>(prefs.getUInt(KEY_JIGGLER_OU_JITTER, 50));
-    cache_.usb_vid             = prefs.getUInt(KEY_USB_VID, 0x303A);
-    cache_.usb_pid             = prefs.getUInt(KEY_USB_PID, 0x1001);
+    cache_.usb_vid             = prefs.getUInt(KEY_USB_VID, 0x046D);
+    cache_.usb_pid             = prefs.getUInt(KEY_USB_PID, 0xB342);
     if (prefs.isKey(KEY_USB_MFR))
-        cache_.usb_manufacturer = std::string(prefs.getString(KEY_USB_MFR, "Espressif").c_str());
+        cache_.usb_manufacturer = std::string(prefs.getString(KEY_USB_MFR, "Logitech").c_str());
     if (prefs.isKey(KEY_USB_PROD))
-        cache_.usb_product = std::string(prefs.getString(KEY_USB_PROD, "USB HID Keyboard").c_str());
+        cache_.usb_product = std::string(prefs.getString(KEY_USB_PROD, "K380 Multi-Device Keyboard").c_str());
     cache_.layout              = std::string(prefs.getString(KEY_LAYOUT, cache_.layout.c_str()).c_str());
     cache_.sim_enabled         = prefs.getBool(KEY_SIM_ENABLED,  false);
     cache_.sim_pause_ms        = prefs.getUInt(KEY_SIM_PAUSE,    18000);

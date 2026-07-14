@@ -30,11 +30,12 @@ struct CachedSettings {
     bool        sim_enabled          = false;
     uint32_t    sim_pause_ms         = 18000;
     uint8_t     sim_words_burst      = 8;
-    // USB HID identity (USB-only; requires reboot to apply)
-    uint32_t    usb_vid              = 0x303A; // Espressif default
-    uint32_t    usb_pid              = 0x1001;
-    std::string usb_manufacturer     = "Espressif";
-    std::string usb_product          = "USB HID Keyboard";
+    // USB HID identity (USB-only; requires reboot to apply).
+    // Defaults to Logitech K380 so the device never advertises as Espressif.
+    uint32_t    usb_vid              = 0x046D; // Logitech
+    uint32_t    usb_pid              = 0xB342; // K380 Multi-Device Keyboard
+    std::string usb_manufacturer     = "Logitech";
+    std::string usb_product          = "K380 Multi-Device Keyboard";
 };
 
 class Store {
