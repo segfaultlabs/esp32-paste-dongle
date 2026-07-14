@@ -1450,6 +1450,11 @@ static void start_web_ui() {
         body += ",\"min_free_heap\":" + String(ESP.getMinFreeHeap());
         body += ",\"heap_size\":"   + String(ESP.getHeapSize());
         body += ",\"firmware_version\":\"" PASTE_DONGLE_VERSION "\"";
+#ifdef HID_MOUSE_ONLY
+        body += ",\"hid_mode\":\"mouse_only\"";
+#else
+        body += ",\"hid_mode\":\"composite\"";
+#endif
 #ifdef HID_BACKEND_USB
         body += ",\"backend\":\"usb\"";
 #else
@@ -1653,6 +1658,36 @@ static void start_web_ui() {
             }
         }
     );
+
+    // Captive portal HTTP handlers — phones do a connectivity check when joining a
+    // WiFi network. If the expected response isn't returned, the OS shows a
+    // "Sign in to network" popup that opens our UI automatically.
+    // DNS already redirects all queries to us (see below), so every HTTP request
+    // for any host arrives here. We handle the known check URLs explicitly and
+    // catch everything else with onNotFound.
+    server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest* r) {
+        // iOS checks captive.apple.com/hotspot-detect.html — expects body "Success"
+        r->send(200, "text/html",
+            "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>"
+            "<script>window.location='http://192.168.4.1/'</script>"
+            "Success</BODY></HTML>");
+    });
+    server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest* r) {
+        // Android/Chrome checks connectivitycheck.gstatic.com/generate_204
+        r->redirect("http://192.168.4.1/");
+    });
+    server.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest* r) {
+        // Windows checks msftconnecttest.com/connecttest.txt
+        r->redirect("http://192.168.4.1/");
+    });
+    server.on("/ncsi.txt", HTTP_GET, [](AsyncWebServerRequest* r) {
+        // Windows NCSI check
+        r->redirect("http://192.168.4.1/");
+    });
+    server.onNotFound([](AsyncWebServerRequest* r) {
+        // Catch-all: any other URL (from any captured DNS query) → redirect to UI
+        r->redirect("http://192.168.4.1/");
+    });
 
     server.begin();
     // Captive portal: redirect every DNS query to us so phones auto-open the UI.

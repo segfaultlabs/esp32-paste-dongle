@@ -891,7 +891,7 @@ label {
       </div>
     </div>
 
-    <button class="btn" id="jiggleSaveBtn" style="margin-top:.75rem;width:100%;">Save jiggler</button>
+    <button class="btn" id="jiggleSaveBtn" style="margin-top:.75rem;width:100%;">Save parameters</button>
   </div>
 
   <!-- Human sim card -->
@@ -928,12 +928,32 @@ label {
       <input type="range" id="simCharDelay" min="40" max="300" value="130">
     </div>
 
-    <button class="btn" id="simSaveBtn" style="margin-top:.5rem;width:100%;">Save simulation</button>
+    <button class="btn" id="simSaveBtn" style="margin-top:.5rem;width:100%;">Save parameters</button>
   </div>
 </div>
 
 <!-- ══════════════ TAB 4: SETTINGS ══════════════ -->
 <div class="tab-panel" id="tab-settings">
+
+  <!-- HID Mode (USB only) -->
+  <div id="hidModeSection" style="display:none;">
+    <p class="section-title">HID Mode</p>
+    <div class="card">
+      <p id="hidModeStatus" style="font-size:.85rem;margin-bottom:.75rem;"></p>
+      <p class="hint" style="margin-bottom:.75rem;">
+        <strong>Keyboard + Mouse</strong> — normal mode: paste text, run macros, jiggle mouse.<br>
+        <strong>Mouse Only</strong> — jiggler use only. No keyboard interface is registered in the USB descriptor.
+        The device appears as a pure mouse — significantly harder to detect by monitoring software.
+        Paste and macro features are disabled in this mode.
+      </p>
+      <p class="hint" style="margin-bottom:.75rem;">
+        Switching modes requires uploading a different firmware binary. Build with:
+        <br><code>pio run -e esp32s3-usb</code> → Keyboard + Mouse
+        <br><code>pio run -e esp32s3-mouse</code> → Mouse Only
+        <br>Then upload the .bin via the OTA section below.
+      </p>
+    </div>
+  </div>
 
   <!-- Appearance -->
   <p class="section-title">Appearance</p>
@@ -1680,17 +1700,29 @@ async function loadSimConfig() {
     else { s.style.display='none'; }
   } catch(e){}
 }
-document.getElementById('simSaveBtn').onclick = async () => {
-  await fetch('/api/sim',{method:'POST',body:new URLSearchParams({
+async function saveSimNow() {
+  return fetch('/api/sim',{method:'POST',body:new URLSearchParams({
     enabled:        simEnabledEl.checked?'1':'0',
     pause_ms:       String(Math.max(5,parseInt(simPauseEl.value,10)||18)*1000),
     words_per_burst:String(Math.max(2,Math.min(20,parseInt(simWordsEl.value,10)||8))),
     char_delay_ms:  String(Math.max(40,Math.min(300,parseInt(simCharDelayEl.value,10)||130))),
   })});
-  toast('Simulation settings saved','success',1800);
+}
+
+// Instant enable/disable toggle
+simEnabledEl.onchange = async () => {
+  await saveSimNow();
+  const on = simEnabledEl.checked;
+  toast(on ? 'Simulation enabled' : 'Simulation disabled', 'success', 1500);
+  if (on) setOrbState('sim'); else setOrbState('');
   loadSimConfig();
-  // update orb
-  if (simEnabledEl.checked) setOrbState('sim');
+};
+
+// Save parameters button (timing values only — enable/disable is already instant)
+document.getElementById('simSaveBtn').onclick = async () => {
+  await saveSimNow();
+  toast('Simulation parameters saved','success',1800);
+  loadSimConfig();
 };
 
 /* ── Jiggler ────────────────────────────────────────────────────── */
@@ -1703,7 +1735,32 @@ function updateJiggleMode() {
   document.getElementById('naturalControls').style.display  = nat?'':'none';
   document.getElementById('geometricControls').style.display = nat?'none':'';
 }
-jigglePatternEl.onchange = updateJiggleMode;
+// Instant enable/disable — fires immediately on toggle, no Save button needed.
+async function saveJigglerNow() {
+  if (jiggleSaveBtnEl.disabled) return; // no mouse HID
+  const nat = jigglePatternEl.value === 'natural';
+  const params = new URLSearchParams();
+  params.append('enabled', jiggleEnabledEl.checked?'1':'0');
+  params.append('pattern', jigglePatternEl.value);
+  if (nat) {
+    params.append('interval_ms',   String(Math.max(5,parseInt(document.getElementById('jiggleMeanInterval').value,10)||30)*1000));
+    params.append('ou_max_radius', String(Math.max(1,Math.min(20,parseInt(document.getElementById('jiggleDriftRadius').value,10)||5))));
+    params.append('ou_jitter',     String(Math.max(0,Math.min(100,parseInt(document.getElementById('jiggleJitter').value,10)||50))));
+  } else {
+    params.append('interval_ms', String(Math.max(1,parseInt(document.getElementById('jiggleInterval').value,10)||30)*1000));
+    params.append('distance',    String(Math.max(1,Math.min(50,parseInt(document.getElementById('jiggleDistance').value,10)||2))));
+    params.append('randomize',   document.getElementById('jiggleRandomize').checked?'1':'0');
+  }
+  await fetch('/api/jiggler',{method:'POST',body:params});
+  if (ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({t:'jiggle_get'}));
+}
+
+jiggleEnabledEl.onchange = async () => {
+  await saveJigglerNow();
+  toast(jiggleEnabledEl.checked ? 'Jiggler enabled' : 'Jiggler disabled', 'success', 1500);
+};
+
+jigglePatternEl.onchange = async () => { updateJiggleMode(); await saveJigglerNow(); };
 
 function applyJigglerState(j) {
   jiggleEnabledEl.checked      = j.enabled;
@@ -1989,8 +2046,20 @@ fetch('/api/status').then(r=>r.json()).then(j => {
   if (j.backend === 'usb') {
     document.getElementById('bleSection').style.display = 'none';
     document.getElementById('hidSection').style.display = '';
+    document.getElementById('hidModeSection').style.display = '';
+    loadHidIdentity();
+    // Show current HID mode — check if hid_mode_mouse_only is exposed in /api/info
+    fetch('/api/info').then(r=>r.json()).then(info => {
+      const mouseOnly = info.hid_mode === 'mouse_only';
+      document.getElementById('hidModeStatus').innerHTML = mouseOnly
+        ? '🖱 Current mode: <strong>Mouse Only</strong> — keyboard interface not registered'
+        : '⌨ Current mode: <strong>Keyboard + Mouse</strong> — composite HID device';
+    }).catch(()=>{
+      document.getElementById('hidModeStatus').textContent = '⌨ Current mode: Keyboard + Mouse';
+    });
   } else {
     document.getElementById('hidSection').style.display = 'none';
+    document.getElementById('hidModeSection').style.display = 'none';
   }
   if (!j.connected) setOrbState('no-host');
 }).catch(()=>{});

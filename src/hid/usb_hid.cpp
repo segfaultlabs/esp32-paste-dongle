@@ -8,15 +8,23 @@
 
 namespace hid {
 
-// Construct the USB HID keyboard and mouse at global scope so their
-// TinyUSB interface registration happens during C++ static initialization,
-// before the Arduino core calls USB.begin() in app_main(). If we wait until
-// setup() to create them, the USB stack is already initialized and HID is
-// left out of the composite descriptor.
+// USB HID objects are constructed at global scope so TinyUSB registers their
+// interfaces during C++ static init, before the Arduino core calls USB.begin().
+// In HID_MOUSE_ONLY mode the keyboard object is omitted entirely so the USB
+// descriptor contains only the mouse interface — the device presents to the host
+// as a pure mouse with no keyboard capability.
+#ifndef HID_MOUSE_ONLY
 static USBHIDKeyboard g_keyboard;
+#endif
 static USBHIDMouse g_mouse;
 
-UsbHidBackend::UsbHidBackend() : keyboard_(g_keyboard), mouse_(g_mouse) {}
+UsbHidBackend::UsbHidBackend()
+#ifndef HID_MOUSE_ONLY
+    : keyboard_(g_keyboard), mouse_(g_mouse)
+#else
+    : mouse_(g_mouse)
+#endif
+{}
 
 void UsbHidBackend::set_identity(uint16_t vid, uint16_t pid,
                                   const std::string& manufacturer,
@@ -29,20 +37,24 @@ void UsbHidBackend::set_identity(uint16_t vid, uint16_t pid,
 
 bool UsbHidBackend::begin() {
     // Apply USB device identity before starting the stack.
-    // These must be set before USB.begin() so the host sees the correct values
-    // during enumeration. Changes take effect on each reboot/re-enumeration.
     USB.VID(vid_);
     USB.PID(pid_);
     USB.manufacturerName(manufacturer_.c_str());
     USB.productName(product_.c_str());
 
-    // The HID objects were already registered during static construction.
-    // Now we just finish their setup and ensure the USB stack is started.
+    // Begin registered HID interfaces. In HID_MOUSE_ONLY mode, only mouse is registered.
+#ifndef HID_MOUSE_ONLY
     keyboard_.begin();
+#endif
     mouse_.begin();
     bool usb_started = USB.begin();
-    Serial.printf("[USB] VID=%04X PID=%04X mfr='%s' prod='%s' begin=%s\n",
+    Serial.printf("[USB] VID=%04X PID=%04X mfr='%s' prod='%s' mode=%s begin=%s\n",
                   vid_, pid_, manufacturer_.c_str(), product_.c_str(),
+#ifdef HID_MOUSE_ONLY
+                  "mouse-only",
+#else
+                  "composite",
+#endif
                   usb_started ? "ok" : "already started");
     return true;
 }
@@ -53,47 +65,59 @@ bool UsbHidBackend::is_connected() {
 }
 
 void UsbHidBackend::send_report(const keymap::Report& report) {
+#ifndef HID_MOUSE_ONLY
     KeyReport kr = {};
     kr.modifiers = report.modifiers;
     kr.keys[0] = report.keycode;
     keyboard_.sendReport(&kr);
-    // Briefly hold the key so the host sees a real press, then release.
-    vTaskDelay(1); // yield for one RTOS tick instead of busy-waiting
+    vTaskDelay(1);
     kr.keys[0] = 0;
     keyboard_.sendReport(&kr);
+#else
+    (void)report;
+#endif
 }
 
 bool UsbHidBackend::send_char(char ch) {
+#ifdef HID_MOUSE_ONLY
+    (void)ch; return false; // no keyboard interface in mouse-only mode
+#else
     keymap::Report r = keymap::lookup(ch, layout_);
-    if (!r.valid) {
-        // Skip characters we don't know how to type.
-        return false;
-    }
+    if (!r.valid) return false;
     send_report(r);
     return true;
+#endif
 }
 
 bool UsbHidBackend::send_string(const std::string& text) {
+#ifdef HID_MOUSE_ONLY
+    (void)text; return false;
+#else
     bool ok = true;
-    for (char ch : text) {
-        if (!send_char(ch)) ok = false;
-    }
+    for (char ch : text) { if (!send_char(ch)) ok = false; }
     return ok;
+#endif
 }
 
 bool UsbHidBackend::send_key(uint8_t keycode, uint8_t modifiers) {
+#ifdef HID_MOUSE_ONLY
+    (void)keycode; (void)modifiers; return false;
+#else
     KeyReport kr = {};
     kr.modifiers = modifiers;
     kr.keys[0] = keycode;
     keyboard_.sendReport(&kr);
-    vTaskDelay(1); // yield for one RTOS tick instead of busy-waiting
+    vTaskDelay(1);
     kr.keys[0] = 0;
     keyboard_.sendReport(&kr);
     return true;
+#endif
 }
 
 void UsbHidBackend::release_all() {
+#ifndef HID_MOUSE_ONLY
     keyboard_.releaseAll();
+#endif
 }
 
 void UsbHidBackend::set_layout(const std::string& layout) {

@@ -16,6 +16,8 @@ public:
     UsbHidBackend();
     bool begin() override;
     bool is_connected() override;
+
+    // Keyboard operations — no-ops in HID_MOUSE_ONLY builds.
     bool send_char(char ch) override;
     bool send_string(const std::string& text) override;
     bool send_key(uint8_t keycode, uint8_t modifiers = 0) override;
@@ -34,8 +36,19 @@ public:
                       const std::string& manufacturer,
                       const std::string& product);
 
+    // True when compiled with -D HID_MOUSE_ONLY=1 (no keyboard interface).
+    static constexpr bool mouse_only() {
+#ifdef HID_MOUSE_ONLY
+        return true;
+#else
+        return false;
+#endif
+    }
+
 private:
+#ifndef HID_MOUSE_ONLY
     USBHIDKeyboard& keyboard_;
+#endif
     USBHIDMouse& mouse_;
     std::string layout_       = "US";
     uint16_t    vid_          = 0x303A;
