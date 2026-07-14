@@ -1,6 +1,7 @@
 #include "mouse_jiggler.h"
 
 #include <Arduino.h>
+#include <algorithm>
 #include <cmath>
 #include <esp_random.h>
 
@@ -89,34 +90,40 @@ bool Jiggler::should_jiggle(unsigned long now) {
 }
 
 void Jiggler::do_natural_jiggle() {
-    // Ornstein-Uhlenbeck process: dx = -θ·x·dt + σ·dW
-    // θ controls mean reversion (pull back to home), σ controls noise magnitude.
-    const float theta = 0.18f;  // mean reversion — feels natural, not too sticky
+    // Ornstein-Uhlenbeck process: compute the NEXT target position.
+    const float theta = 0.18f;
     float max_r = static_cast<float>(settings_.ou_max_radius);
     if (max_r < 1.0f) max_r = 1.0f;
     float sigma = (settings_.ou_jitter / 100.0f) * max_r * 0.55f;
 
-    ou_x_ = ou_x_ * (1.0f - theta) + sigma * gaussian();
-    ou_y_ = ou_y_ * (1.0f - theta) + sigma * gaussian();
+    float new_x = ou_x_ * (1.0f - theta) + sigma * gaussian();
+    float new_y = ou_y_ * (1.0f - theta) + sigma * gaussian();
 
-    // Soft-clamp: if outside max_radius, scale back to the boundary.
-    float r = sqrtf(ou_x_ * ou_x_ + ou_y_ * ou_y_);
-    if (r > max_r) {
-        ou_x_ = ou_x_ * max_r / r;
-        ou_y_ = ou_y_ * max_r / r;
-    }
+    float r = sqrtf(new_x * new_x + new_y * new_y);
+    if (r > max_r) { new_x = new_x * max_r / r; new_y = new_y * max_r / r; }
 
-    // Quantise to integer pixels, report only the delta from last report.
-    int new_ix = static_cast<int>(roundf(ou_x_));
-    int new_iy = static_cast<int>(roundf(ou_y_));
-    int8_t dx = static_cast<int8_t>(new_ix - ou_ix_);
-    int8_t dy = static_cast<int8_t>(new_iy - ou_iy_);
-    ou_ix_ = new_ix;
-    ou_iy_ = new_iy;
+    // Instead of jumping to the target in one frame, set up a smooth animation
+    // that sends many small HID reports over ou_anim_ms milliseconds.
+    // loop() runs every ~5ms, so ticks ≈ ou_anim_ms / 5.
+    uint16_t anim_ms = settings_.ou_anim_ms;
+    if (anim_ms < 50)  anim_ms = 50;
+    if (anim_ms > 800) anim_ms = 800;
+    int steps = static_cast<int>(anim_ms / 5);
+    if (steps < 1) steps = 1;
 
-    if (dx != 0 || dy != 0) {
-        backend_->send_mouse_move(dx, dy);
-    }
+    float total_dx = new_x - ou_x_;
+    float total_dy = new_y - ou_y_;
+
+    // Update the continuous OU position to the new target.
+    ou_x_ = new_x;
+    ou_y_ = new_y;
+
+    // Set animation: spread the total pixel delta over 'steps' ticks.
+    anim_dx_per_tick_ = total_dx / static_cast<float>(steps);
+    anim_dy_per_tick_ = total_dy / static_cast<float>(steps);
+    anim_acc_x_       = 0.0f;
+    anim_acc_y_       = 0.0f;
+    anim_steps_left_  = steps;
 }
 
 void Jiggler::do_jiggle() {
@@ -173,6 +180,28 @@ void Jiggler::do_jiggle() {
 
 void Jiggler::tick() {
     unsigned long now = millis();
+
+    // Drive smooth animation: send one sub-step toward the current OU target.
+    if (anim_steps_left_ > 0 && backend_ && backend_->has_mouse() && backend_->is_connected()) {
+        anim_acc_x_ += anim_dx_per_tick_;
+        anim_acc_y_ += anim_dy_per_tick_;
+
+        // Extract whole-pixel deltas from the sub-pixel accumulator.
+        int ix = static_cast<int>(anim_acc_x_);
+        int iy = static_cast<int>(anim_acc_y_);
+        if (ix != 0 || iy != 0) {
+            int8_t dx = static_cast<int8_t>(std::max(-127, std::min(127, ix)));
+            int8_t dy = static_cast<int8_t>(std::max(-127, std::min(127, iy)));
+            backend_->send_mouse_move(dx, dy);
+            anim_acc_x_ -= static_cast<float>(ix);
+            anim_acc_y_ -= static_cast<float>(iy);
+            ou_ix_ += dx;
+            ou_iy_ += dy;
+        }
+        --anim_steps_left_;
+    }
+
+    // Fire a new OU event when the Poisson interval elapses.
     if (should_jiggle(now)) {
         do_jiggle();
     }

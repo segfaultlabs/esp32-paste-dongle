@@ -26,6 +26,7 @@ struct CachedSettings {
     bool        jiggler_randomize    = false;
     uint8_t     jiggler_ou_radius    = 5;
     uint8_t     jiggler_ou_jitter    = 50;
+    uint16_t    jiggler_ou_anim_ms   = 300;
     std::string layout               = "US";
     bool        sim_enabled          = false;
     uint32_t    sim_pause_ms         = 18000;
@@ -54,6 +55,7 @@ public:
     bool               get_jiggler_randomize()   const { return cache_.jiggler_randomize; }
     uint8_t            get_jiggler_ou_radius()   const { return cache_.jiggler_ou_radius; }
     uint8_t            get_jiggler_ou_jitter()   const { return cache_.jiggler_ou_jitter; }
+    uint16_t           get_jiggler_ou_anim_ms()  const { return cache_.jiggler_ou_anim_ms; }
     uint32_t           get_usb_vid()             const { return cache_.usb_vid; }
     uint32_t           get_usb_pid()             const { return cache_.usb_pid; }
     const std::string& get_usb_manufacturer()    const { return cache_.usb_manufacturer; }
@@ -72,6 +74,7 @@ public:
     void set_jiggler_randomize(bool v);
     void set_jiggler_ou_radius(uint8_t v);
     void set_jiggler_ou_jitter(uint8_t v);
+    void set_jiggler_ou_anim_ms(uint16_t v);
     void set_usb_vid(uint32_t v);
     void set_usb_pid(uint32_t v);
     void set_usb_manufacturer(const std::string& v);

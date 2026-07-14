@@ -1095,6 +1095,7 @@ static void drain_cmd_queue() {
                     cfg.set_jiggler_randomize(c->jiggle_cfg.randomize_interval);
                     cfg.set_jiggler_ou_radius(c->jiggle_cfg.ou_max_radius);
                     cfg.set_jiggler_ou_jitter(c->jiggle_cfg.ou_jitter);
+                    cfg.set_jiggler_ou_anim_ms(c->jiggle_cfg.ou_anim_ms);
                     ws.text(c->client_id, "{\"t\":\"jiggle_ack\"}");
                 }
                 break;
@@ -1108,6 +1109,7 @@ static void drain_cmd_queue() {
                 msg += ",\"randomize\":"      + String(js.randomize_interval ? "true" : "false");
                 msg += ",\"ou_max_radius\":"  + String(js.ou_max_radius);
                 msg += ",\"ou_jitter\":"      + String(js.ou_jitter);
+                msg += ",\"ou_anim_ms\":"     + String(js.ou_anim_ms);
                 msg += ",\"has_mouse\":"      + String(backend && backend->has_mouse() ? "true" : "false");
                 msg += "}";
                 ws.text(c->client_id, msg);
@@ -1527,8 +1529,9 @@ static void start_web_ui() {
         body += ",\"pattern\":\""   + String(jiggler::pattern_to_string(js.pattern)) + "\"";
         body += ",\"randomize\":"   + String(js.randomize_interval ? "true" : "false");
         body += ",\"ou_max_radius\":" + String(js.ou_max_radius);
-        body += ",\"ou_jitter\":"   + String(js.ou_jitter);
-        body += ",\"has_mouse\":"   + String(backend && backend->has_mouse() ? "true" : "false");
+        body += ",\"ou_jitter\":"    + String(js.ou_jitter);
+        body += ",\"ou_anim_ms\":"   + String(js.ou_anim_ms);
+        body += ",\"has_mouse\":"    + String(backend && backend->has_mouse() ? "true" : "false");
         body += "}";
         request->send(200, "application/json", body);
     });
@@ -1583,6 +1586,12 @@ static void start_web_ui() {
             int v = request->getParam("ou_jitter", true)->value().toInt();
             if (v < 0) v = 0; if (v > 100) v = 100;
             js.ou_jitter = static_cast<uint8_t>(v);
+            changed = true;
+        }
+        if (request->hasParam("ou_anim_ms", true)) {
+            int v = request->getParam("ou_anim_ms", true)->value().toInt();
+            if (v < 50) v = 50; if (v > 800) v = 800;
+            js.ou_anim_ms = static_cast<uint16_t>(v);
             changed = true;
         }
         if (changed) {
@@ -1770,6 +1779,7 @@ void setup() {
     js.randomize_interval = cfg.get_jiggler_randomize();
     js.ou_max_radius      = cfg.get_jiggler_ou_radius();
     js.ou_jitter          = cfg.get_jiggler_ou_jitter();
+    js.ou_anim_ms         = cfg.get_jiggler_ou_anim_ms();
     g_jiggler = new jiggler::Jiggler(backend);
     g_jiggler->set_settings(js);
     Serial.printf("[Jiggler] enabled=%d interval=%ums distance=%d pattern=%s random=%d\n",

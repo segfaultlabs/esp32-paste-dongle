@@ -36,8 +36,9 @@ static const char* KEY_JIGGLER_DISTANCE = "j_dist";
 static const char* KEY_JIGGLER_PATTERN  = "j_pat";
 static const char* KEY_JIGGLER_RANDOMIZE = "j_rnd";
 static const char* KEY_LAYOUT           = "layout";
-static const char* KEY_JIGGLER_OU_RADIUS = "j_ou_r";
-static const char* KEY_JIGGLER_OU_JITTER = "j_ou_j";
+static const char* KEY_JIGGLER_OU_RADIUS  = "j_ou_r";
+static const char* KEY_JIGGLER_OU_JITTER  = "j_ou_j";
+static const char* KEY_JIGGLER_OU_ANIM    = "j_ou_a";
 static const char* KEY_USB_VID           = "usb_vid";
 static const char* KEY_USB_PID           = "usb_pid";
 static const char* KEY_USB_MFR           = "usb_mfr";
@@ -65,6 +66,7 @@ void Store::load_all() {
     cache_.jiggler_randomize   = prefs.getBool(KEY_JIGGLER_RANDOMIZE, false);
     cache_.jiggler_ou_radius   = static_cast<uint8_t>(prefs.getUInt(KEY_JIGGLER_OU_RADIUS, 5));
     cache_.jiggler_ou_jitter   = static_cast<uint8_t>(prefs.getUInt(KEY_JIGGLER_OU_JITTER, 50));
+    cache_.jiggler_ou_anim_ms  = static_cast<uint16_t>(prefs.getUInt(KEY_JIGGLER_OU_ANIM, 300));
     cache_.usb_vid             = prefs.getUInt(KEY_USB_VID, 0x046D);
     cache_.usb_pid             = prefs.getUInt(KEY_USB_PID, 0xB342);
     if (prefs.isKey(KEY_USB_MFR))
@@ -147,6 +149,11 @@ void Store::set_jiggler_ou_radius(uint8_t v) {
 void Store::set_jiggler_ou_jitter(uint8_t v) {
     cache_.jiggler_ou_jitter = v;
     NVS_WRITE(prefs.putUInt(KEY_JIGGLER_OU_JITTER, v));
+}
+
+void Store::set_jiggler_ou_anim_ms(uint16_t v) {
+    cache_.jiggler_ou_anim_ms = v;
+    NVS_WRITE(prefs.putUInt(KEY_JIGGLER_OU_ANIM, v));
 }
 
 void Store::set_usb_vid(uint32_t v) {

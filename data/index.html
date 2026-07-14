@@ -865,6 +865,15 @@ label {
           <input type="range" id="jiggleJitter" min="0" max="100" value="50">
           <p class="hint">40–60% is the sweet spot for natural movement</p>
         </div>
+
+        <div class="slider-row">
+          <div class="slider-header">
+            <label for="jiggleAnimMs">Movement speed</label>
+            <span class="slider-val"><span id="jiggleAnimMsVal">300</span> ms</span>
+          </div>
+          <input type="range" id="jiggleAnimMs" min="50" max="800" value="300">
+          <p class="hint">How long each drift glide takes. Low (50 ms) = subtle micro-tremor. High (800 ms) = slow flowing drift. 200–400 ms looks most natural.</p>
+        </div>
       </div>
     </div>
 
@@ -940,17 +949,23 @@ label {
     <p class="section-title">HID Mode</p>
     <div class="card">
       <p id="hidModeStatus" style="font-size:.85rem;margin-bottom:.75rem;"></p>
+      <div class="card" style="margin-bottom:.6rem;">
+        <div style="display:flex;gap:1rem;flex-wrap:wrap;">
+          <div style="flex:1;min-width:180px;">
+            <div style="font-weight:600;margin-bottom:.3rem;">⌨ Keyboard + Mouse</div>
+            <div class="hint">Full features: paste, macros, jiggler.<br>USB Serial debug port <strong>visible</strong>.</div>
+          </div>
+          <div style="flex:1;min-width:180px;">
+            <div style="font-weight:600;margin-bottom:.3rem;">🖱 Mouse Only</div>
+            <div class="hint">Jiggler use only. Keyboard and USB serial <strong>hidden</strong>.<br>Presents as a pure mouse — hardest to detect.</div>
+          </div>
+        </div>
+      </div>
       <p class="hint" style="margin-bottom:.75rem;">
-        <strong>Keyboard + Mouse</strong> — normal mode: paste text, run macros, jiggle mouse.<br>
-        <strong>Mouse Only</strong> — jiggler use only. No keyboard interface is registered in the USB descriptor.
-        The device appears as a pure mouse — significantly harder to detect by monitoring software.
-        Paste and macro features are disabled in this mode.
-      </p>
-      <p class="hint" style="margin-bottom:.75rem;">
-        Switching modes requires uploading a different firmware binary. Build with:
-        <br><code>pio run -e esp32s3-usb</code> → Keyboard + Mouse
-        <br><code>pio run -e esp32s3-mouse</code> → Mouse Only
-        <br>Then upload the .bin via the OTA section below.
+        Switching requires uploading the appropriate firmware. Build and upload:
+        <br><code>pio run -e esp32s3-usb</code> → Keyboard + Mouse (with serial)
+        <br><code>pio run -e esp32s3-mouse</code> → Mouse Only (no serial)
+        <br>Use the OTA section below to upload the .bin file.
       </p>
     </div>
   </div>
@@ -1729,6 +1744,7 @@ document.getElementById('simSaveBtn').onclick = async () => {
 const jiggleEnabledEl  = document.getElementById('jiggleEnabled');
 const jigglePatternEl  = document.getElementById('jigglePattern');
 const jiggleSaveBtnEl  = document.getElementById('jiggleSaveBtn');
+const jiggleAnimMsEl   = document.getElementById('jiggleAnimMs');
 
 function updateJiggleMode() {
   const nat = jigglePatternEl.value === 'natural';
@@ -1746,6 +1762,7 @@ async function saveJigglerNow() {
     params.append('interval_ms',   String(Math.max(5,parseInt(document.getElementById('jiggleMeanInterval').value,10)||30)*1000));
     params.append('ou_max_radius', String(Math.max(1,Math.min(20,parseInt(document.getElementById('jiggleDriftRadius').value,10)||5))));
     params.append('ou_jitter',     String(Math.max(0,Math.min(100,parseInt(document.getElementById('jiggleJitter').value,10)||50))));
+    params.append('ou_anim_ms',    String(Math.max(50,Math.min(800,parseInt(jiggleAnimMsEl.value,10)||300))));
   } else {
     params.append('interval_ms', String(Math.max(1,parseInt(document.getElementById('jiggleInterval').value,10)||30)*1000));
     params.append('distance',    String(Math.max(1,Math.min(50,parseInt(document.getElementById('jiggleDistance').value,10)||2))));
@@ -1768,8 +1785,10 @@ function applyJigglerState(j) {
   document.getElementById('jiggleMeanInterval').value = Math.max(5,Math.round((j.interval_ms||30000)/1000));
   document.getElementById('jiggleDriftRadius').value  = j.ou_max_radius||5;
   document.getElementById('jiggleJitter').value       = j.ou_jitter!==undefined?j.ou_jitter:50;
+  jiggleAnimMsEl.value = j.ou_anim_ms||300;
   document.getElementById('jiggleDriftRadiusVal').textContent = j.ou_max_radius||5;
   document.getElementById('jiggleJitterVal').textContent      = j.ou_jitter!==undefined?j.ou_jitter:50;
+  document.getElementById('jiggleAnimMsVal').textContent      = j.ou_anim_ms||300;
   document.getElementById('jiggleInterval').value  = Math.max(1,Math.round((j.interval_ms||30000)/1000));
   document.getElementById('jiggleDistance').value  = j.distance||2;
   document.getElementById('jiggleDistVal').textContent = j.distance||2;
@@ -1791,6 +1810,7 @@ async function loadJigglerConfig() {
 document.getElementById('jiggleDistance').oninput    = e => document.getElementById('jiggleDistVal').textContent       = e.target.value;
 document.getElementById('jiggleDriftRadius').oninput = e => document.getElementById('jiggleDriftRadiusVal').textContent = e.target.value;
 document.getElementById('jiggleJitter').oninput      = e => document.getElementById('jiggleJitterVal').textContent      = e.target.value;
+jiggleAnimMsEl.oninput = e => document.getElementById('jiggleAnimMsVal').textContent = e.target.value;
 
 jiggleSaveBtnEl.onclick = async () => {
   const nat = jigglePatternEl.value === 'natural';
@@ -1801,6 +1821,7 @@ jiggleSaveBtnEl.onclick = async () => {
     params.append('interval_ms',   String(Math.max(5,parseInt(document.getElementById('jiggleMeanInterval').value,10)||30)*1000));
     params.append('ou_max_radius', String(Math.max(1,Math.min(20,parseInt(document.getElementById('jiggleDriftRadius').value,10)||5))));
     params.append('ou_jitter',     String(Math.max(0,Math.min(100,parseInt(document.getElementById('jiggleJitter').value,10)||50))));
+    params.append('ou_anim_ms',    String(Math.max(50,Math.min(800,parseInt(jiggleAnimMsEl.value,10)||300))));
   } else {
     params.append('interval_ms', String(Math.max(1,parseInt(document.getElementById('jiggleInterval').value,10)||30)*1000));
     params.append('distance',    String(Math.max(1,Math.min(50,parseInt(document.getElementById('jiggleDistance').value,10)||2))));
