@@ -39,6 +39,8 @@ static const char* KEY_LAYOUT           = "layout";
 static const char* KEY_JIGGLER_OU_RADIUS  = "j_ou_r";
 static const char* KEY_JIGGLER_OU_JITTER  = "j_ou_j";
 static const char* KEY_JIGGLER_OU_ANIM    = "j_ou_a";
+static const char* KEY_HID_MOUSE_ONLY    = "hid_m";
+static const char* KEY_HID_SERIAL        = "hid_s";
 static const char* KEY_USB_VID           = "usb_vid";
 static const char* KEY_USB_PID           = "usb_pid";
 static const char* KEY_USB_MFR           = "usb_mfr";
@@ -67,6 +69,8 @@ void Store::load_all() {
     cache_.jiggler_ou_radius   = static_cast<uint8_t>(prefs.getUInt(KEY_JIGGLER_OU_RADIUS, 5));
     cache_.jiggler_ou_jitter   = static_cast<uint8_t>(prefs.getUInt(KEY_JIGGLER_OU_JITTER, 50));
     cache_.jiggler_ou_anim_ms  = static_cast<uint16_t>(prefs.getUInt(KEY_JIGGLER_OU_ANIM, 300));
+    cache_.hid_mouse_only      = prefs.getBool(KEY_HID_MOUSE_ONLY, false);
+    cache_.hid_serial_enabled  = prefs.getBool(KEY_HID_SERIAL,     false);
     cache_.usb_vid             = prefs.getUInt(KEY_USB_VID, 0x046D);
     cache_.usb_pid             = prefs.getUInt(KEY_USB_PID, 0xB342);
     if (prefs.isKey(KEY_USB_MFR))
@@ -156,6 +160,14 @@ void Store::set_jiggler_ou_anim_ms(uint16_t v) {
     NVS_WRITE(prefs.putUInt(KEY_JIGGLER_OU_ANIM, v));
 }
 
+void Store::set_hid_mouse_only(bool v) {
+    cache_.hid_mouse_only = v;
+    NVS_WRITE(prefs.putBool(KEY_HID_MOUSE_ONLY, v));
+}
+void Store::set_hid_serial_enabled(bool v) {
+    cache_.hid_serial_enabled = v;
+    NVS_WRITE(prefs.putBool(KEY_HID_SERIAL, v));
+}
 void Store::set_usb_vid(uint32_t v) {
     cache_.usb_vid = v;
     NVS_WRITE(prefs.putUInt(KEY_USB_VID, v));

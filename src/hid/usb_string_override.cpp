@@ -33,12 +33,10 @@
 #include <cstdint>
 #include "tusb.h"
 
-extern "C" {
-    extern const char* g_usb_manufacturer;
-    extern const char* g_usb_product;
-    extern uint16_t    g_usb_vid;
-    extern uint16_t    g_usb_pid;
-}
+extern const char* g_usb_manufacturer;
+extern const char* g_usb_product;
+extern uint16_t    g_usb_vid;
+extern uint16_t    g_usb_pid;
 
 // ── Device descriptor ────────────────────────────────────────────────────────
 

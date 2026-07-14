@@ -15,7 +15,7 @@
 #include <freertos/queue.h>
 #include "hid/ihid_backend.h"
 #ifdef HID_BACKEND_USB
-#include "hid/usb_hid.h"
+#include "hid/usb_hid.h"  // also declares g_rtc_usb_mode
 #endif
 #include "keymap.h"
 #include "config_store.h"
@@ -1452,18 +1452,57 @@ static void start_web_ui() {
         body += ",\"min_free_heap\":" + String(ESP.getMinFreeHeap());
         body += ",\"heap_size\":"   + String(ESP.getHeapSize());
         body += ",\"firmware_version\":\"" PASTE_DONGLE_VERSION "\"";
-#ifdef HID_MOUSE_ONLY
-        body += ",\"hid_mode\":\"mouse_only\"";
-#else
-        body += ",\"hid_mode\":\"composite\"";
-#endif
 #ifdef HID_BACKEND_USB
+        body += (g_rtc_usb_mode & 1) ? ",\"hid_mode\":\"mouse_only\"" : ",\"hid_mode\":\"composite\"";
+        body += (g_rtc_usb_mode & 2) ? ",\"serial_enabled\":true" : ",\"serial_enabled\":false";
         body += ",\"backend\":\"usb\"";
 #else
-        body += ",\"backend\":\"ble\"";
+        body += ",\"hid_mode\":\"composite\",\"serial_enabled\":false,\"backend\":\"ble\"";
 #endif
         body += "}";
         request->send(200, "application/json", body);
+    });
+
+    // GET: returns current USB mode flags
+    // POST: mouse_only=0|1  serial=0|1  → saves to NVS, sets RTC, reboots
+    server.on("/api/hid_mode", HTTP_GET, [](AsyncWebServerRequest* request) {
+        String body = "{";
+#ifdef HID_BACKEND_USB
+        body += "\"mouse_only\":"     + String((g_rtc_usb_mode & 1) ? "true" : "false");
+        body += ",\"serial_enabled\":" + String((g_rtc_usb_mode & 2) ? "true" : "false");
+#else
+        body += "\"mouse_only\":false,\"serial_enabled\":false";
+#endif
+        body += "}";
+        request->send(200, "application/json", body);
+    });
+
+    server.on("/api/hid_mode", HTTP_POST, [](AsyncWebServerRequest* request) {
+#ifdef HID_BACKEND_USB
+        bool changed = false;
+        bool mouse_only = cfg.get_hid_mouse_only();
+        bool serial_on  = cfg.get_hid_serial_enabled();
+        if (request->hasParam("mouse_only", true)) {
+            String v = request->getParam("mouse_only", true)->value();
+            mouse_only = (v == "1" || v == "true");
+            changed = true;
+        }
+        if (request->hasParam("serial", true)) {
+            String v = request->getParam("serial", true)->value();
+            serial_on = (v == "1" || v == "true");
+            changed = true;
+        }
+        if (changed) {
+            cfg.set_hid_mouse_only(mouse_only);
+            cfg.set_hid_serial_enabled(serial_on);
+            // Update g_rtc_usb_mode so the runtime behaviour changes immediately
+            // without a reboot (e.g. keyboard suppression takes effect right away).
+            g_rtc_usb_mode = (mouse_only ? 1 : 0) | (serial_on ? 2 : 0);
+            request->send(200, "application/json", "{\"ok\":true}");
+            return;
+        }
+#endif
+        request->send(200, "application/json", "{\"ok\":true}");
     });
 
     server.on("/api/hid_identity", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -1711,6 +1750,7 @@ static void start_web_ui() {
 
 void setup() {
     Serial.begin(115200);
+
     delay(1000);
     Serial.println("Starting ESP32 Paste Dongle");
 
@@ -1731,7 +1771,17 @@ void setup() {
         Serial.println("[FS] LittleFS mount failed even after format — filesystem unavailable");
     }
 
+#ifndef HID_BACKEND_USB
     cfg.begin();
+#endif
+#ifdef HID_BACKEND_USB
+    // Set runtime mode flags from NVS so behaviour (keyboard suppression etc.)
+    // is correct without needing a reboot or RTC tricks.
+    g_rtc_usb_mode = (cfg.get_hid_mouse_only()     ? 1 : 0)
+                   | (cfg.get_hid_serial_enabled() ? 2 : 0);
+    Serial.printf("[USB] mode=0x%02X (mouse_only=%d serial=%d)\n",
+                  g_rtc_usb_mode, (g_rtc_usb_mode&1)!=0, (g_rtc_usb_mode&2)!=0);
+#endif
     if (cfg.get_device_name().empty()) {
         cfg.set_device_name(DEVICE_NAME);
     }
@@ -1744,13 +1794,11 @@ void setup() {
 
     backend = hid::create_backend();
 #ifdef HID_BACKEND_USB
-    // Apply USB identity from NVS before the USB stack finalises descriptors.
     static_cast<hid::UsbHidBackend*>(backend)->set_identity(
         static_cast<uint16_t>(cfg.get_usb_vid()),
         static_cast<uint16_t>(cfg.get_usb_pid()),
         cfg.get_usb_manufacturer(),
-        cfg.get_usb_product()
-    );
+        cfg.get_usb_product());
 #endif
     if (!backend || !backend->begin()) {
         Serial.println("Failed to start HID backend");

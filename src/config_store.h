@@ -31,6 +31,9 @@ struct CachedSettings {
     bool        sim_enabled          = false;
     uint32_t    sim_pause_ms         = 18000;
     uint8_t     sim_words_burst      = 8;
+    // USB HID mode (runtime-switchable via RTC memory + reboot).
+    bool        hid_mouse_only       = false; // false = composite, true = mouse-only
+    bool        hid_serial_enabled   = false; // false = no CDC, true = CDC serial visible
     // USB HID identity (USB-only; requires reboot to apply).
     // Defaults to Logitech K380 so the device never advertises as Espressif.
     uint32_t    usb_vid              = 0x046D; // Logitech
@@ -56,6 +59,8 @@ public:
     uint8_t            get_jiggler_ou_radius()   const { return cache_.jiggler_ou_radius; }
     uint8_t            get_jiggler_ou_jitter()   const { return cache_.jiggler_ou_jitter; }
     uint16_t           get_jiggler_ou_anim_ms()  const { return cache_.jiggler_ou_anim_ms; }
+    bool               get_hid_mouse_only()       const { return cache_.hid_mouse_only; }
+    bool               get_hid_serial_enabled()   const { return cache_.hid_serial_enabled; }
     uint32_t           get_usb_vid()             const { return cache_.usb_vid; }
     uint32_t           get_usb_pid()             const { return cache_.usb_pid; }
     const std::string& get_usb_manufacturer()    const { return cache_.usb_manufacturer; }
@@ -75,6 +80,8 @@ public:
     void set_jiggler_ou_radius(uint8_t v);
     void set_jiggler_ou_jitter(uint8_t v);
     void set_jiggler_ou_anim_ms(uint16_t v);
+    void set_hid_mouse_only(bool v);
+    void set_hid_serial_enabled(bool v);
     void set_usb_vid(uint32_t v);
     void set_usb_pid(uint32_t v);
     void set_usb_manufacturer(const std::string& v);

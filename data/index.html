@@ -946,27 +946,30 @@ label {
 
   <!-- HID Mode (USB only) -->
   <div id="hidModeSection" style="display:none;">
-    <p class="section-title">HID Mode</p>
+    <p class="section-title">USB Mode</p>
     <div class="card">
-      <p id="hidModeStatus" style="font-size:.85rem;margin-bottom:.75rem;"></p>
-      <div class="card" style="margin-bottom:.6rem;">
-        <div style="display:flex;gap:1rem;flex-wrap:wrap;">
-          <div style="flex:1;min-width:180px;">
-            <div style="font-weight:600;margin-bottom:.3rem;">⌨ Keyboard + Mouse</div>
-            <div class="hint">Full features: paste, macros, jiggler.<br>USB Serial debug port <strong>visible</strong>.</div>
-          </div>
-          <div style="flex:1;min-width:180px;">
-            <div style="font-weight:600;margin-bottom:.3rem;">🖱 Mouse Only</div>
-            <div class="hint">Jiggler use only. Keyboard and USB serial <strong>hidden</strong>.<br>Presents as a pure mouse — hardest to detect.</div>
-          </div>
+      <div class="toggle-row" style="margin-bottom:.75rem;">
+        <div>
+          <div class="toggle-label">Mouse Only</div>
+          <div class="toggle-sub">Hides keyboard interface — appears as pure mouse. Best for jiggler-only use. Paste/macros disabled.</div>
         </div>
+        <label class="toggle">
+          <input type="checkbox" id="modeMouseOnly">
+          <span class="toggle-track"></span>
+        </label>
       </div>
-      <p class="hint" style="margin-bottom:.75rem;">
-        Switching requires uploading the appropriate firmware. Build and upload:
-        <br><code>pio run -e esp32s3-usb</code> → Keyboard + Mouse (with serial)
-        <br><code>pio run -e esp32s3-mouse</code> → Mouse Only (no serial)
-        <br>Use the OTA section below to upload the .bin file.
-      </p>
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">USB Serial port</div>
+          <div class="toggle-sub">Shows a CDC serial interface on USB. Useful for debugging but visible to software inspecting USB devices.</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="modeSerial">
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+      <p class="hint" style="margin-top:.75rem;">Toggles apply instantly — no reboot needed. Keyboard interface stays registered in the USB descriptor (both modes show keyboard + mouse to the host), but keyboard reports are suppressed in Mouse Only mode. Full interface removal requires a separate firmware build.</p>
+      <p id="hidModeStatus" style="font-size:.82rem;color:var(--accent);margin-top:.4rem;"></p>
     </div>
   </div>
 
@@ -2063,21 +2066,45 @@ otaBtnEl.onclick = () => {
 };
 
 /* ── Status / backend detection ─────────────────────────────────── */
+// ---- USB Mode toggles ------------------------------------------------------
+async function loadUsbMode() {
+  try {
+    const j = await fetch('/api/hid_mode').then(r=>r.json());
+    document.getElementById('modeMouseOnly').checked = j.mouse_only;
+    document.getElementById('modeSerial').checked    = j.serial_enabled;
+  } catch(e){}
+}
+
+async function applyUsbMode() {
+  const mouseOnly = document.getElementById('modeMouseOnly').checked;
+  const serial    = document.getElementById('modeSerial').checked;
+  const statusEl  = document.getElementById('hidModeStatus');
+  statusEl.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/hid_mode', {
+      method: 'POST',
+      body: new URLSearchParams({ mouse_only: mouseOnly?'1':'0', serial: serial?'1':'0' })
+    });
+    const j = await r.json();
+    if (j.ok) {
+      statusEl.textContent = mouseOnly
+        ? '🖱 Mouse Only active — keyboard reports suppressed immediately'
+        : '⌨ Keyboard + Mouse active';
+      statusEl.style.color = 'var(--accent)';
+    }
+  } catch(e) { statusEl.textContent = 'Error saving mode'; }
+}
+
+document.getElementById('modeMouseOnly').onchange = applyUsbMode;
+document.getElementById('modeSerial').onchange    = applyUsbMode;
+
 fetch('/api/status').then(r=>r.json()).then(j => {
   if (j.backend === 'usb') {
     document.getElementById('bleSection').style.display = 'none';
     document.getElementById('hidSection').style.display = '';
     document.getElementById('hidModeSection').style.display = '';
     loadHidIdentity();
-    // Show current HID mode — check if hid_mode_mouse_only is exposed in /api/info
-    fetch('/api/info').then(r=>r.json()).then(info => {
-      const mouseOnly = info.hid_mode === 'mouse_only';
-      document.getElementById('hidModeStatus').innerHTML = mouseOnly
-        ? '🖱 Current mode: <strong>Mouse Only</strong> — keyboard interface not registered'
-        : '⌨ Current mode: <strong>Keyboard + Mouse</strong> — composite HID device';
-    }).catch(()=>{
-      document.getElementById('hidModeStatus').textContent = '⌨ Current mode: Keyboard + Mouse';
-    });
+    loadUsbMode();
   } else {
     document.getElementById('hidSection').style.display = 'none';
     document.getElementById('hidModeSection').style.display = 'none';
